@@ -9,7 +9,7 @@ servers:
 tags:
   - name: Batch
 paths:
-  /api/v1/batch:
+  /api/v1/mock/acc/batch:
     post:
       tags: [Batch]
       operationId: postBatch

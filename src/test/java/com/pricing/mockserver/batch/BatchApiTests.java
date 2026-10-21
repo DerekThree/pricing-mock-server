@@ -140,7 +140,7 @@ class BatchApiTests {
 		@Test
 		void acceptsTheConfiguredLimitAndRejectsOneMoreWithoutStoringIt() throws Exception {
 			UUID batchId = UUID.randomUUID();
-			configuredMockMvc.perform(post("/api/v1/batch")
+			configuredMockMvc.perform(post("/api/v1/mock/acc/batch")
 						.contentType(MediaType.APPLICATION_JSON).content(submission(batchId, 5000)))
 					.andExpect(status().isAccepted())
 					.andExpect(jsonPath("$.batchId").value(batchId.toString()));
@@ -167,7 +167,7 @@ class BatchApiTests {
 					) complete_accounts
 					""", Integer.class));
 
-			configuredMockMvc.perform(post("/api/v1/batch")
+			configuredMockMvc.perform(post("/api/v1/mock/acc/batch")
 						.contentType(MediaType.APPLICATION_JSON)
 						.content(submission(UUID.randomUUID(), 5001)))
 					.andExpect(status().isBadRequest())
@@ -192,7 +192,7 @@ class BatchApiTests {
 					execute function reject_last_account_write()
 					""");
 			try {
-				configuredMockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+				configuredMockMvc.perform(post("/api/v1/mock/acc/batch").contentType(MediaType.APPLICATION_JSON)
 							.content(submission(UUID.randomUUID(), 5000)))
 						.andExpect(status().isServiceUnavailable())
 						.andExpect(jsonPath("$.code").value("ACCOUNT_STORE_UNAVAILABLE"));
@@ -209,7 +209,7 @@ class BatchApiTests {
 	void rejectsAcceptedIdentityWithoutChangingStoredWork(boolean changePayload) throws Exception {
 		UUID batchId = UUID.randomUUID();
 		String request = submission(batchId);
-		mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+		mockMvc.perform(post("/api/v1/mock/acc/batch").contentType(MediaType.APPLICATION_JSON)
 				.content(request)).andExpect(status().isAccepted());
 		jdbcTemplate.update("update batch_outbox set processed = true where batch_id = ?", batchId);
 		List<List<Map<String, Object>>> accepted = storedWork();
@@ -221,7 +221,7 @@ class BatchApiTests {
 				.replace("00123.40", "different").replace("true", "false")
 				.replace("FEE001", "FEE003").replace("12.34", "56.78")
 				.replace("\"feeRequestId\": 7", "\"feeRequestId\": 9") : request;
-		mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+		mockMvc.perform(post("/api/v1/mock/acc/batch").contentType(MediaType.APPLICATION_JSON)
 				.content(repeated))
 				.andExpect(status().isConflict())
 				.andExpect(jsonPath("$.code").value("BATCH_ALREADY_ACCEPTED"))
@@ -247,7 +247,7 @@ class BatchApiTests {
 				responses.add(executor.submit(() -> {
 					ready.countDown();
 					assertTrue(start.await(10, TimeUnit.SECONDS));
-					return mockMvc.perform(post("/api/v1/batch")
+					return mockMvc.perform(post("/api/v1/mock/acc/batch")
 							.contentType(MediaType.APPLICATION_JSON).content(request)).andReturn();
 				}));
 			}
@@ -291,7 +291,7 @@ class BatchApiTests {
 	@Test
 	void acceptsCallerIdentityAfterStoringTheBatch() throws Exception {
 		UUID batchId = UUID.randomUUID();
-		mockMvc.perform(post("/api/v1/batch")
+		mockMvc.perform(post("/api/v1/mock/acc/batch")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(submission(batchId)))
 				.andExpect(status().isAccepted())
@@ -355,7 +355,7 @@ class BatchApiTests {
 				   "fees": [{"feeRequestId": 7, "code": "FEE002"}]}
 				]
 				""";
-		mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+		mockMvc.perform(post("/api/v1/mock/acc/batch").contentType(MediaType.APPLICATION_JSON)
 				.content("{\"batchId\":\"" + UUID.randomUUID() + "\"," + accounts + "}"))
 				.andExpect(status().isAccepted());
 		assertRowCounts(1, 2, 0, 2);
@@ -366,11 +366,11 @@ class BatchApiTests {
 				""", String.class));
 		assertEquals(2, jdbcTemplate.queryForObject(
 				"select count(distinct id) from fee_requests where fee_request_id = 7", Integer.class));
-		mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+		mockMvc.perform(post("/api/v1/mock/acc/batch").contentType(MediaType.APPLICATION_JSON)
 				.content("{\"batchId\":\"" + UUID.randomUUID() + "\"," + accounts + "}"))
 				.andExpect(status().isAccepted());
 		assertRowCounts(2, 4, 0, 4);
-		mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+		mockMvc.perform(post("/api/v1/mock/acc/batch").contentType(MediaType.APPLICATION_JSON)
 				.content("{\"batchId\":\"" + UUID.randomUUID() + "\","
 						+ accounts.replace("ACC002", "ACC001") + "}"))
 				.andExpect(status().isBadRequest())
@@ -388,6 +388,7 @@ class BatchApiTests {
 				.andExpect(status().isOk())
 				.andExpect(content().string(org.hamcrest.Matchers.containsString(
 						"title: Mock Account Processor API")))
+				.andExpect(content().string(containsString("/api/v1/mock/acc/batch:")))
 				.andExpect(content().string(containsString("'409':")))
 				.andExpect(content().string(containsString("BATCH_MAX_ACCOUNTS")))
 				.andExpect(content().string(containsString("BATCH_ALREADY_ACCEPTED")));
@@ -436,7 +437,7 @@ class BatchApiTests {
 				for each row when (new.fee_request_id = 8) execute function reject_fee_write()
 				""");
 		try {
-			mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+			mockMvc.perform(post("/api/v1/mock/acc/batch").contentType(MediaType.APPLICATION_JSON)
 						.content(submission(UUID.randomUUID())))
 					.andExpect(status().isServiceUnavailable())
 					.andExpect(jsonPath("$.code").value("ACCOUNT_STORE_UNAVAILABLE"));
@@ -454,7 +455,7 @@ class BatchApiTests {
 			try {
 				admin.createStatement().execute("alter role account_app nologin");
 				dataSource.getHikariPoolMXBean().softEvictConnections();
-				mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+				mockMvc.perform(post("/api/v1/mock/acc/batch").contentType(MediaType.APPLICATION_JSON)
 							.content(submission(UUID.randomUUID())))
 						.andExpect(status().isServiceUnavailable())
 						.andExpect(jsonPath("$.code").value("ACCOUNT_STORE_UNAVAILABLE"))
@@ -482,7 +483,7 @@ class BatchApiTests {
 				for each row execute function repeat_fee_identity()
 				""");
 		try {
-			mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+			mockMvc.perform(post("/api/v1/mock/acc/batch").contentType(MediaType.APPLICATION_JSON)
 					.content(submission(UUID.randomUUID())))
 					.andExpect(status().isBadRequest())
 					.andExpect(jsonPath("$.code").value("INVALID_BATCH"))
@@ -513,7 +514,7 @@ class BatchApiTests {
 				for each row execute function invalidate_amount()
 				""");
 		try {
-			mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+			mockMvc.perform(post("/api/v1/mock/acc/batch").contentType(MediaType.APPLICATION_JSON)
 					.content(submission(UUID.randomUUID())))
 					.andExpect(status().isBadRequest())
 					.andExpect(jsonPath("$.code").value("INVALID_BATCH"))
@@ -529,7 +530,7 @@ class BatchApiTests {
 
 	@Test
 	void rejectsMissingRequiredAttributesBeforeStoringAnyRows() throws Exception {
-		mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+		mockMvc.perform(post("/api/v1/mock/acc/batch").contentType(MediaType.APPLICATION_JSON)
 				.content(submission(UUID.randomUUID()).replace("""
 				    "attributes": [
 				      {"code": "BALANCE", "value": 12345678901234567890.123456789},
@@ -546,7 +547,7 @@ class BatchApiTests {
 	@MethodSource("recordErrors")
 	void identifiesTheInvalidRecordInTheMessage(
 			String scenario, String request, List<String> details) throws Exception {
-		var response = mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+		var response = mockMvc.perform(post("/api/v1/mock/acc/batch").contentType(MediaType.APPLICATION_JSON)
 				.content(request))
 				.andExpect(status().isBadRequest())
 				.andExpect(jsonPath("$.code").value("INVALID_BATCH"));
@@ -560,7 +561,7 @@ class BatchApiTests {
 	@MethodSource("invalidRequests")
 	void rejectsInvalidSubmissionsWithoutStoringAnyRows(
 			String scenario, String request, String message) throws Exception {
-		mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+		mockMvc.perform(post("/api/v1/mock/acc/batch").contentType(MediaType.APPLICATION_JSON)
 				.content(request))
 				.andExpect(status().isBadRequest())
 				.andExpect(jsonPath("$.code").value("INVALID_BATCH"))
@@ -572,7 +573,7 @@ class BatchApiTests {
 	@ParameterizedTest
 	@ValueSource(strings = {"0", "0.01", "12.3400", "12345678901234567890.12"})
 	void preservesAcceptedMonetaryValuesAndOmittedAmounts(String amount) throws Exception {
-		mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+		mockMvc.perform(post("/api/v1/mock/acc/batch").contentType(MediaType.APPLICATION_JSON)
 				.content(submission(UUID.randomUUID()).replace(
 						"\"transactionAmount\": 12.34", "\"transactionAmount\": " + amount)))
 				.andExpect(status().isAccepted());
@@ -589,7 +590,7 @@ class BatchApiTests {
 	@MethodSource("attributeScalars")
 	void preservesAttributeScalarMeaningInJpaAndJsonb(
 			String json, Object expected, String jsonType) throws Exception {
-		mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+		mockMvc.perform(post("/api/v1/mock/acc/batch").contentType(MediaType.APPLICATION_JSON)
 				.content(submission(UUID.randomUUID()).replace(
 						"\"value\": true", "\"value\": " + json)))
 				.andExpect(status().isAccepted());
@@ -615,14 +616,14 @@ class BatchApiTests {
 	@Test
 	void leavesRequiredAttributeAndConfiguredTypeChecksToEvaluation() throws Exception {
 		String request = submission(UUID.randomUUID()).replace("FEE002", "FEE001");
-		mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+		mockMvc.perform(post("/api/v1/mock/acc/batch").contentType(MediaType.APPLICATION_JSON)
 				.content(request))
 				.andExpect(status().isAccepted());
 		assertEquals(2, jdbcTemplate.queryForObject(
 				"select count(*) from account_attributes where code = 'BALANCE'", Integer.class));
 		assertEquals(2, jdbcTemplate.queryForObject(
 				"select count(*) from fee_requests where code = 'FEE001'", Integer.class));
-		mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+		mockMvc.perform(post("/api/v1/mock/acc/batch").contentType(MediaType.APPLICATION_JSON)
 				.content(submission(UUID.randomUUID()).replace("""
 				    "attributes": [
 				      {"code": "BALANCE", "value": 12345678901234567890.123456789},
@@ -644,7 +645,7 @@ class BatchApiTests {
 			"fee_requests, fee_request_id", "fee_requests, code"
 	})
 	void enforcesRequiredStoredValuesInPostgres(String table, String column) throws Exception {
-		mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+		mockMvc.perform(post("/api/v1/mock/acc/batch").contentType(MediaType.APPLICATION_JSON)
 				.content(submission(UUID.randomUUID())))
 				.andExpect(status().isAccepted());
 		DataIntegrityViolationException failure = assertThrows(DataIntegrityViolationException.class,
@@ -656,7 +657,7 @@ class BatchApiTests {
 
 	@Test
 	void enforcesScalarMoneyUniquenessAndForeignKeyConstraintsInPostgres() throws Exception {
-		mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+		mockMvc.perform(post("/api/v1/mock/acc/batch").contentType(MediaType.APPLICATION_JSON)
 				.content(submission(UUID.randomUUID()))).andExpect(status().isAccepted());
 		Long accountId = jdbcTemplate.queryForObject("select id from accounts", Long.class);
 		for (String value : List.of("{}", "[]", "null")) {

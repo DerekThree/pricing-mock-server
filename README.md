@@ -1,8 +1,12 @@
 # pricing-mock-server
 
 Spring Boot Mock Server. The Mock Account Processor accepts Pricing Batches at
-`POST /api/v1/batch`, storing the complete submission and pending Batch Outbox row in one
+`POST /api/v1/mock/acc/batch`, storing the complete submission and pending Batch Outbox row in one
 transaction before returning `202` with `batchId` and an acceptance message.
+
+The planned Transaction Processor wake-up endpoint is `POST /api/v1/mock/txn/wake`.
+Both paths share the `/api/v1/mock/*` routing prefix. The wake-up endpoint is not implemented yet.
+
 The controller delegates to `BatchService`, which validates submissions and owns the transaction.
 `BatchRepository` persists the batch with its owned accounts, attributes, and Fee Requests through
 JPA cascades, following the backend's owned-child mappings.

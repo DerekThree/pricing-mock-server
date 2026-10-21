@@ -114,7 +114,7 @@ class BatchNotificationApiTests {
 	@Test
 	void notifiesOnlyAfterCommitWithoutBusinessPayload() throws Exception {
 		UUID batchId = UUID.randomUUID();
-		mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+		mockMvc.perform(post("/api/v1/mock/acc/batch").contentType(MediaType.APPLICATION_JSON)
 				.content(submission(batchId)))
 				.andExpect(status().isAccepted())
 				.andExpect(jsonPath("$.batchId").value(batchId.toString()));
@@ -140,7 +140,7 @@ class BatchNotificationApiTests {
 	@Test
 	void acceptsWhileTheConsumerHasNotResponded() throws Exception {
 		responseGate = new CountDownLatch(1);
-		mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+		mockMvc.perform(post("/api/v1/mock/acc/batch").contentType(MediaType.APPLICATION_JSON)
 				.content(submission(UUID.randomUUID())))
 				.andExpect(status().isAccepted());
 		await().atMost(Duration.ofSeconds(3)).until(() -> WAKE_UPS.size() == 1);
@@ -152,7 +152,7 @@ class BatchNotificationApiTests {
 	@Test
 	void stopsRetryingAfterATransientFailureSucceeds() throws Exception {
 		responses = new int[] {503, 204};
-		mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+		mockMvc.perform(post("/api/v1/mock/acc/batch").contentType(MediaType.APPLICATION_JSON)
 				.content(submission(UUID.randomUUID())))
 				.andExpect(status().isAccepted());
 		assertAttempts(2);
@@ -162,7 +162,7 @@ class BatchNotificationApiTests {
 	@ValueSource(ints = {400, 503, 302})
 	void stopsAfterThreeAttemptsWhenTheConsumerNeverAccepts(int response) throws Exception {
 		responses = new int[] {response};
-		mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+		mockMvc.perform(post("/api/v1/mock/acc/batch").contentType(MediaType.APPLICATION_JSON)
 				.content(submission(UUID.randomUUID())))
 				.andExpect(status().isAccepted());
 		assertAttempts(3);
@@ -171,16 +171,16 @@ class BatchNotificationApiTests {
 	@Test
 	void doesNotAdvertiseValidationFailuresDuplicatesOrFailedCommits() throws Exception {
 		UUID batchId = UUID.randomUUID();
-		mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+		mockMvc.perform(post("/api/v1/mock/acc/batch").contentType(MediaType.APPLICATION_JSON)
 				.content(submission(batchId).replace("12.34", "-1")))
 				.andExpect(status().isBadRequest());
 		assertEquals(0, WAKE_UPS.size());
-		mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+		mockMvc.perform(post("/api/v1/mock/acc/batch").contentType(MediaType.APPLICATION_JSON)
 				.content(submission(batchId))).andExpect(status().isAccepted());
 		assertAttempts(1);
 		jdbcTemplate.update("update batch_outbox set processed = true where batch_id = ?", batchId);
 		List<List<Map<String, Object>>> accepted = storedWork(jdbcTemplate);
-		mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+		mockMvc.perform(post("/api/v1/mock/acc/batch").contentType(MediaType.APPLICATION_JSON)
 				.content(submission(batchId)))
 				.andExpect(status().isConflict());
 
@@ -196,7 +196,7 @@ class BatchNotificationApiTests {
 				deferrable initially deferred for each row execute function reject_batch_commit()
 				""");
 		try {
-			mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+			mockMvc.perform(post("/api/v1/mock/acc/batch").contentType(MediaType.APPLICATION_JSON)
 					.content(submission(UUID.randomUUID())))
 					.andExpect(status().isServiceUnavailable())
 					.andExpect(jsonPath("$.code").value("ACCOUNT_STORE_UNAVAILABLE"));
@@ -320,7 +320,7 @@ class BatchNotificationApiTests {
 		@Test
 		void usesTheConfiguredAttemptLimitAndDelay() throws Exception {
 			responses = new int[] {503};
-			configuredMockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+			configuredMockMvc.perform(post("/api/v1/mock/acc/batch").contentType(MediaType.APPLICATION_JSON)
 					.content(submission(UUID.randomUUID())))
 					.andExpect(status().isAccepted());
 			assertAttempts(2);
@@ -331,7 +331,7 @@ class BatchNotificationApiTests {
 		@Test
 		void countsTimedOutRequestsAndKeepsAcceptedRowsUnchanged() throws Exception {
 			responseDelayMillis = 1500;
-			configuredMockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+			configuredMockMvc.perform(post("/api/v1/mock/acc/batch").contentType(MediaType.APPLICATION_JSON)
 					.content(submission(UUID.randomUUID())))
 					.andExpect(status().isAccepted());
 			assertAttempts(2);
@@ -358,7 +358,7 @@ class BatchNotificationApiTests {
 
 	private void acceptBatch(ConfigurableApplicationContext application) throws Exception {
 		MockMvcBuilders.webAppContextSetup((WebApplicationContext) application).build()
-				.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+				.perform(post("/api/v1/mock/acc/batch").contentType(MediaType.APPLICATION_JSON)
 						.content(submission(UUID.randomUUID())))
 				.andExpect(status().isAccepted());
 	}
