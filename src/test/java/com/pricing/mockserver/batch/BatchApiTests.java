@@ -3,15 +3,23 @@ package com.pricing.mockserver.batch;
 import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.SQLException;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Stream;
 
 import com.pricing.mockserver.accountattribute.AccountAttributeEntity;
 import com.zaxxer.hikari.HikariDataSource;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -27,9 +35,14 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.emptyOrNullString;
+import static org.hamcrest.Matchers.not;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -164,8 +177,11 @@ class BatchApiTests {
 				.content("{\"batchId\":\"" + UUID.randomUUID() + "\","
 						+ accounts.replace("ACC002", "ACC001") + "}"))
 				.andExpect(status().isBadRequest())
-				.andExpect(jsonPath("$.message").value(
-						"Account numbers must be unique within the Pricing Batch"));
+				.andExpect(jsonPath("$.message", containsString(
+						"Account numbers must be unique within the Pricing Batch")))
+				.andExpect(jsonPath("$.message", containsString("accounts[1].accountNumber")))
+				.andExpect(jsonPath("$.message", containsString("accountNumber=ACC001")))
+				.andExpect(jsonPath("$.message", containsString("accounts[0].accountNumber")));
 		assertRowCounts(2, 4, 0, 4);
 	}
 
@@ -252,23 +268,190 @@ class BatchApiTests {
 	}
 
 	@Test
-	void retainsTheBackendSubmissionValidationBoundaries() throws Exception {
-		String valid = submission(UUID.randomUUID());
-		for (String invalid : List.of(
-				valid.replace("\"value\": true", "\"value\": {}"),
-				valid.replace("\"value\": true", "\"value\": []"),
-				valid.replace("\"value\": true", "\"value\": null"),
-				valid.replace("\"transactionAmount\": 12.34", "\"transactionAmount\": null"),
-				valid.replace("\"transactionAmount\": 12.34", "\"transactionAmount\": -0.01"),
-				valid.replace("\"transactionAmount\": 12.34", "\"transactionAmount\": 0.001"),
-				valid.replace("\"feeRequestId\": 8", "\"feeRequestId\": 7"),
-				valid.replace("\"accountNumber\": \"ACC001\"", "\"accountNumber\": \"lowercase\""))) {
+	void describesLateFeeIdentityViolationsAndRollsBackTheBatch() throws Exception {
+		jdbcTemplate.execute("""
+				create function repeat_fee_identity() returns trigger language plpgsql as $$
+				begin
+				    new.fee_request_id := 7;
+				    return new;
+				end;
+				$$
+				""");
+		jdbcTemplate.execute("""
+				create trigger repeat_fee_identity before insert on fee_requests
+				for each row execute function repeat_fee_identity()
+				""");
+		try {
 			mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
-						.content(invalid))
+					.content(submission(UUID.randomUUID())))
 					.andExpect(status().isBadRequest())
-					.andExpect(jsonPath("$.code").value("INVALID_BATCH"));
+					.andExpect(jsonPath("$.code").value("INVALID_BATCH"))
+					.andExpect(jsonPath("$.message", containsString(
+							"Fee Request IDs must be unique within an account")))
+					.andExpect(jsonPath("$.message", containsString("fee_requests")))
+					.andExpect(jsonPath("$.message", containsString(
+							"Key (account_id, fee_request_id)")));
+			assertRowCounts(0, 0, 0, 0);
+		} finally {
+			jdbcTemplate.execute("drop trigger repeat_fee_identity on fee_requests");
+			jdbcTemplate.execute("drop function repeat_fee_identity()");
+		}
+	}
+
+	@Test
+	void identifiesTheFailedStoredRecordForMonetaryConstraints() throws Exception {
+		jdbcTemplate.execute("""
+				create function invalidate_amount() returns trigger language plpgsql as $$
+				begin
+				    new.transaction_amount := 12.341;
+				    return new;
+				end;
+				$$
+				""");
+		jdbcTemplate.execute("""
+				create trigger invalidate_amount before insert on fee_requests
+				for each row execute function invalidate_amount()
+				""");
+		try {
+			mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+					.content(submission(UUID.randomUUID())))
+					.andExpect(status().isBadRequest())
+					.andExpect(jsonPath("$.code").value("INVALID_BATCH"))
+					.andExpect(jsonPath("$.message", containsString("fee_requests")))
+					.andExpect(jsonPath("$.message", containsString("FEE001")))
+					.andExpect(jsonPath("$.message", containsString("12.341")));
+			assertRowCounts(0, 0, 0, 0);
+		} finally {
+			jdbcTemplate.execute("drop trigger invalidate_amount on fee_requests");
+			jdbcTemplate.execute("drop function invalidate_amount()");
+		}
+	}
+
+	@Test
+	void rejectsMissingRequiredAttributesBeforeStoringAnyRows() throws Exception {
+		mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+				.content(submission(UUID.randomUUID()).replace("""
+				    "attributes": [
+				      {"code": "BALANCE", "value": 12345678901234567890.123456789},
+				      {"code": "BALANCE", "value": "00123.40"},
+				      {"code": "ACTIVE", "value": true}
+				    ],
+				""", "")))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.code").value("INVALID_BATCH"));
+		assertRowCounts(0, 0, 0, 0);
+	}
+
+	@ParameterizedTest(name = "{0}")
+	@MethodSource("recordErrors")
+	void identifiesTheInvalidRecordInTheMessage(
+			String scenario, String request, List<String> details) throws Exception {
+		var response = mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+				.content(request))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.code").value("INVALID_BATCH"));
+		for (String detail : details) {
+			response.andExpect(jsonPath("$.message", containsString(detail)));
 		}
 		assertRowCounts(0, 0, 0, 0);
+	}
+
+	@ParameterizedTest(name = "{0}")
+	@MethodSource("invalidRequests")
+	void rejectsInvalidSubmissionsWithoutStoringAnyRows(
+			String scenario, String request, String message) throws Exception {
+		mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+				.content(request))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.code").value("INVALID_BATCH"))
+				.andExpect(jsonPath("$.message", not(emptyOrNullString())))
+				.andExpect(jsonPath("$.message", containsString(message)));
+		assertRowCounts(0, 0, 0, 0);
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = {"0", "0.01", "12.3400", "12345678901234567890.12"})
+	void preservesAcceptedMonetaryValuesAndOmittedAmounts(String amount) throws Exception {
+		mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+				.content(submission(UUID.randomUUID()).replace(
+						"\"transactionAmount\": 12.34", "\"transactionAmount\": " + amount)))
+				.andExpect(status().isAccepted());
+		assertEquals(0, new BigDecimal(amount).compareTo(jdbcTemplate.queryForObject(
+				"select transaction_amount from fee_requests where fee_request_id = 7",
+				BigDecimal.class)));
+		assertNull(jdbcTemplate.queryForObject(
+				"select transaction_amount from fee_requests where fee_request_id = 8",
+				BigDecimal.class));
+		assertRowCounts(1, 1, 3, 2);
+	}
+
+	@ParameterizedTest(name = "{0}")
+	@MethodSource("attributeScalars")
+	void preservesAttributeScalarMeaningInJpaAndJsonb(
+			String json, Object expected, String jsonType) throws Exception {
+		mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+				.content(submission(UUID.randomUUID()).replace(
+						"\"value\": true", "\"value\": " + json)))
+				.andExpect(status().isAccepted());
+		Object stored = entityManager.createQuery("""
+				select attribute from AccountAttributeEntity attribute where attribute.code = 'ACTIVE'
+				""", AccountAttributeEntity.class).getSingleResult().getValue().getValue();
+		assertInstanceOf(expected.getClass(), stored);
+		assertEquals(jsonType, jdbcTemplate.queryForObject(
+				"select jsonb_typeof(value) from account_attributes where code = 'ACTIVE'",
+				String.class));
+		String text = jdbcTemplate.queryForObject(
+				"select value #>> '{}' from account_attributes where code = 'ACTIVE'", String.class);
+		if (expected instanceof BigDecimal number) {
+			assertEquals(0, number.compareTo((BigDecimal) stored));
+			assertEquals(0, number.compareTo(new BigDecimal(text)));
+		} else {
+			assertEquals(expected, stored);
+			assertEquals(expected.toString(), text);
+		}
+		assertRowCounts(1, 1, 3, 2);
+	}
+
+	@Test
+	void leavesRequiredAttributeAndConfiguredTypeChecksToEvaluation() throws Exception {
+		String request = submission(UUID.randomUUID()).replace("FEE002", "FEE001");
+		mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+				.content(request))
+				.andExpect(status().isAccepted());
+		assertEquals(2, jdbcTemplate.queryForObject(
+				"select count(*) from account_attributes where code = 'BALANCE'", Integer.class));
+		assertEquals(2, jdbcTemplate.queryForObject(
+				"select count(*) from fee_requests where code = 'FEE001'", Integer.class));
+		mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+				.content(submission(UUID.randomUUID()).replace("""
+				    "attributes": [
+				      {"code": "BALANCE", "value": 12345678901234567890.123456789},
+				      {"code": "BALANCE", "value": "00123.40"},
+				      {"code": "ACTIVE", "value": true}
+				    ],
+				""", "    \"attributes\": [],\n")))
+				.andExpect(status().isAccepted());
+		assertRowCounts(2, 2, 3, 4);
+	}
+
+	@ParameterizedTest
+	@CsvSource({
+			"batch_outbox, batch_id", "batch_outbox, processed",
+			"accounts, batch_id", "accounts, account_number", "accounts, product_code",
+			"accounts, branch_code", "accounts, pricing_date",
+			"account_attributes, account_id", "account_attributes, code",
+			"account_attributes, value", "fee_requests, account_id",
+			"fee_requests, fee_request_id", "fee_requests, code"
+	})
+	void enforcesRequiredStoredValuesInPostgres(String table, String column) throws Exception {
+		mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+				.content(submission(UUID.randomUUID())))
+				.andExpect(status().isAccepted());
+		DataIntegrityViolationException failure = assertThrows(DataIntegrityViolationException.class,
+				() -> jdbcTemplate.update("update " + table + " set " + column + " = null"));
+		assertEquals("23502", assertInstanceOf(SQLException.class,
+				failure.getMostSpecificCause()).getSQLState());
+		assertRowCounts(1, 1, 3, 2);
 	}
 
 	@Test
@@ -330,7 +513,148 @@ class BatchApiTests {
 				"select count(*) from fee_requests", Integer.class));
 	}
 
-	private String submission(UUID batchId) {
+	private static Stream<Arguments> recordErrors() {
+		String account = """
+				{"accountNumber":"ACC001","productCode":"PROD","branchCode":"BRANCH",
+				 "pricingDate":"2026-10-21",
+				 "attributes":[{"code":"TEXT","value":"value"},{"code":"ACTIVE","value":true}],
+				 "fees":[{"feeRequestId":7,"code":"FEE001","transactionAmount":12.34}]}
+				""".strip();
+		String second = account.replace("ACC001", "ACC002");
+		String prefix = "{\"batchId\":\"" + UUID.randomUUID() + "\",\"accounts\":[" + account + ",";
+		Stream.Builder<Arguments> requests = Stream.builder();
+		requests.add(arguments("unparseable document", "{", List.of("line", "column")));
+		requests.add(arguments("duplicate account", prefix + account + "]}",
+				List.of("accounts[1].accountNumber", "ACC001", "accounts[0].accountNumber")));
+		requests.add(arguments("duplicate Fee Request", prefix + second.replace(
+				"\"transactionAmount\":12.34}", "\"transactionAmount\":12.34},"
+						+ "{\"feeRequestId\":7,\"code\":\"FEE002\"}") + "]}",
+				List.of("accounts[1].fees[1].feeRequestId", "ACC002", "feeRequestId=7",
+						"FEE002", "accounts[1].fees[0].feeRequestId")));
+		requests.add(arguments("fractional-cent amount", prefix + second.replace(
+				"12.34", "12.341") + "]}", List.of("accounts[1].fees[0].transactionAmount",
+						"ACC002", "feeRequestId=7", "FEE001")));
+		for (String value : List.of("{}", "[]")) {
+			requests.add(arguments("malformed attribute " + value, prefix + second.replace(
+					"\"value\":true", "\"value\":" + value) + "]}",
+					List.of("accounts[1].attributes[1].value")));
+		}
+		requests.add(arguments("explicit null amount", prefix + second.replace(
+				"12.34", "null") + "]}", List.of("accounts[1].fees[0].transactionAmount")));
+		requests.add(arguments("invalid account number", prefix + second.replace(
+				"ACC002", "bad-account") + "]}", List.of("accounts[1].accountNumber")));
+		requests.add(arguments("invalid Fee code", prefix + second.replace(
+				"FEE001", "bad-fee") + "]}", List.of("accounts[1].fees[0].code")));
+		requests.add(arguments("null attribute", prefix + second.replace(
+				"{\"code\":\"ACTIVE\",\"value\":true}", "null") + "]}",
+				List.of("accounts[1].attributes[1]", "ACC002")));
+		requests.add(arguments("null Fee Request", prefix + second.replace(
+				"\"transactionAmount\":12.34}", "\"transactionAmount\":12.34},null") + "]}",
+				List.of("accounts[1].fees[1]", "ACC002")));
+		requests.add(arguments("null account", prefix + "null]}", List.of("accounts[1]")));
+		return requests.build();
+	}
+
+	private static Stream<Arguments> invalidRequests() {
+		UUID batchId = UUID.randomUUID();
+		String valid = submission(batchId);
+		Stream.Builder<Arguments> requests = Stream.builder();
+		requests.add(arguments("malformed JSON", "{", "Request body is malformed"));
+		requests.add(arguments("null body", "null", "Request body is malformed"));
+		requests.add(arguments("missing batch ID", valid.replace(
+				"\"batchId\": \"" + batchId + "\",", ""), "batchId"));
+		requests.add(arguments("invalid batch ID", valid.replace(
+				batchId.toString(), "not-a-uuid"), "Request body is malformed"));
+		requests.add(arguments("missing accounts", "{\"batchId\":\"" + batchId + "\"}", "accounts"));
+		for (String accounts : List.of("null", "[]", "[null]", "{}")) {
+			requests.add(arguments("invalid accounts " + accounts,
+					"{\"batchId\":\"" + batchId + "\",\"accounts\":" + accounts + "}",
+					accounts.equals("{}") ? "Request body is malformed" : "ccounts"));
+		}
+		for (var field : Map.of("accountNumber", "ACC001", "productCode", "PROD001",
+				"branchCode", "BR001", "pricingDate", "2026-10-21").entrySet()) {
+			String property = "\"" + field.getKey() + "\": \"" + field.getValue() + "\"";
+			requests.add(arguments("missing " + field.getKey(),
+					valid.replace(property + ",", ""), field.getKey()));
+			requests.add(arguments("null " + field.getKey(), valid.replace(
+					property, "\"" + field.getKey() + "\": null"), field.getKey()));
+		}
+		for (var code : Map.of("ACC001", "accountNumber", "PROD001", "productCode",
+				"BR001", "branchCode", "ACTIVE", "code", "FEE001", "code").entrySet()) {
+			for (String invalid : List.of("", " ", "lowercase", "BAD-CODE", "A".repeat(26))) {
+				requests.add(arguments("invalid " + code.getKey() + " " + invalid,
+						valid.replace(code.getKey(), invalid), code.getValue()));
+			}
+		}
+		requests.add(arguments("invalid date", valid.replace(
+				"2026-10-21", "not-a-date"), "Request body is malformed"));
+		requests.add(arguments("missing attribute code", valid.replace(
+				"\"code\": \"ACTIVE\", ", ""), "code"));
+		requests.add(arguments("missing attribute value", valid.replace(
+				", \"value\": true", ""), "value"));
+		requests.add(arguments("null attribute code", valid.replace(
+				"\"code\": \"ACTIVE\"", "\"code\": null"), "code"));
+		for (String value : List.of("{}", "[]", "null")) {
+			requests.add(arguments("invalid attribute value " + value, valid.replace(
+					"\"value\": true", "\"value\": " + value),
+					value.equals("null") ? "value" : "Request body is malformed"));
+		}
+		requests.add(arguments("null attributes", valid.replace("""
+				    "attributes": [
+				      {"code": "BALANCE", "value": 12345678901234567890.123456789},
+				      {"code": "BALANCE", "value": "00123.40"},
+				      {"code": "ACTIVE", "value": true}
+				    ],
+				""", "    \"attributes\": null,\n"), "attributes"));
+		requests.add(arguments("null attribute item", valid.replace(
+				"{\"code\": \"ACTIVE\", \"value\": true}", "null"), "null items"));
+		String fees = """
+				    "fees": [{"feeRequestId": 7, "code": "FEE001", "transactionAmount": 12.34},
+				             {"feeRequestId": 8, "code": "FEE002"}]
+				""".strip();
+		for (String value : List.of("null", "[]", "[null]")) {
+			requests.add(arguments("invalid fees " + value, valid.replace(
+					fees, "\"fees\": " + value), value.equals("[null]") ? "Fee Requests" : "fees"));
+		}
+		requests.add(arguments("missing fees", valid.replace(
+				",\n    " + fees, ""), "fees"));
+		requests.add(arguments("missing Fee Request ID", valid.replace(
+				"\"feeRequestId\": 7, ", ""), "feeRequestId"));
+		for (String id : List.of("null", "\"not-an-id\"", "9223372036854775808")) {
+			requests.add(arguments("invalid Fee Request ID " + id, valid.replace(
+					"\"feeRequestId\": 7", "\"feeRequestId\": " + id),
+					id.equals("null") ? "feeRequestId" : "Request body is malformed"));
+		}
+		requests.add(arguments("duplicate Fee Request ID", valid.replace(
+				"\"feeRequestId\": 8", "\"feeRequestId\": 7"),
+				"Fee Request IDs must be unique within an account"));
+		requests.add(arguments("missing Fee code", valid.replace(
+				", \"code\": \"FEE002\"", ""), "code"));
+		requests.add(arguments("null Fee code", valid.replace(
+				"\"code\": \"FEE002\"", "\"code\": null"), "code"));
+		for (String amount : List.of("null", "-0.01", "-0.001", "0.001", "0.009", "12.341")) {
+			requests.add(arguments("invalid transaction amount " + amount, valid.replace(
+					"\"transactionAmount\": 12.34", "\"transactionAmount\": " + amount),
+					amount.equals("null") ? "Request body is malformed" : "mount"));
+		}
+		return requests.build();
+	}
+
+	private static Stream<Arguments> attributeScalars() {
+		return Stream.of(
+				arguments("\"00123.40\"", "00123.40", "string"),
+				arguments("\"true\"", "true", "string"),
+				arguments("\"false\"", "false", "string"),
+				arguments("\"\"", "", "string"),
+				arguments("true", Boolean.TRUE, "boolean"),
+				arguments("false", Boolean.FALSE, "boolean"),
+				arguments("9223372036854775808", new BigDecimal("9223372036854775808"), "number"),
+				arguments("-12.3400", new BigDecimal("-12.34"), "number"),
+				arguments("1e-9", new BigDecimal("0.000000001"), "number"),
+				arguments("1e25", new BigDecimal("10000000000000000000000000"), "number"));
+	}
+
+	private static String submission(UUID batchId) {
 		return """
 				{
 				  "batchId": "%s",
