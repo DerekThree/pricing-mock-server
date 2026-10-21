@@ -28,7 +28,16 @@ paths:
               schema:
                 $ref: '#/components/schemas/BatchAcceptance'
         '400':
-          $ref: '#/components/responses/Error'
+          description: >-
+            INVALID_BATCH. Invalid submissions, including those exceeding the configured
+            account-count limit, are rejected without storing any part of the batch.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                code: INVALID_BATCH
+                message: Pricing Batch exceeds the limit of 100,000 accounts (100,001 submitted).
         '409':
           description: >-
             BATCH_ALREADY_ACCEPTED. This batch ID has already been accepted, regardless of
@@ -81,6 +90,9 @@ components:
           format: uuid
         accounts:
           type: array
+          description: >-
+            At most BATCH_MAX_ACCOUNTS Accounts per submission (default 100,000).
+            The configured limit is enforced by the provider at runtime.
           minItems: 1
           items:
             $ref: "#/components/schemas/BatchAccount"

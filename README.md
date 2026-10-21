@@ -11,6 +11,34 @@ Batch identity uses insert-only persistence and the PostgreSQL outbox primary ke
 regardless of payload differences. Concurrent requests can accept only one batch for that ID;
 rejected transactions preserve all accepted rows, including the outbox's `processed` flag.
 
+`BATCH_MAX_ACCOUNTS` sets the maximum Accounts per Pricing Batch (default `100000`).
+Set it before starting the server; no submission contract change is required.
+Submissions above this limit return `400 INVALID_BATCH` with the configured limit and
+submitted count in the message, before any rows are stored.
+
+## Pricing Engine wake-ups
+
+After transactional `BatchRepository.save` returns with the transaction committed,
+`BatchService.accept` starts `notifyPricingEngine` on a Java virtual thread. The method sends
+an empty HTTP `POST` to the configured Pricing Engine URL, with no Batch ID or business payload.
+The submission returns `202` without waiting for the consumer or delivery retries.
+
+| Configuration variable | Default | Purpose |
+| --- | --- | --- |
+| `PRICING_ENGINE_WAKE_UP_URL` | `http://localhost:8082/api/v1/work-available` | Consumer endpoint |
+| `PRICING_ENGINE_MAX_ATTEMPTS` | `3` | Total requests, including the initial attempt |
+| `PRICING_ENGINE_HTTP_TIMEOUT` | `2s` | Connection and response-read timeout |
+| `PRICING_ENGINE_RETRY_DELAY` | `1s` | Delay between failed attempts |
+
+Any `2xx` response ends the sequence. Other statuses, connection errors, and timeouts consume
+an attempt. Retries remain in memory and stop after the configured total attempt limit.
+Delivery failure does not become `ACCOUNT_STORE_UNAVAILABLE` or change accepted rows or
+`processed`. No notification-delivery state is persisted. Startup recovery belongs to issue 06.
+
+Delivery logs use `INFO` for an acknowledged wake-up, `WARN` for failed attempts with retries
+remaining or an interrupted retry, and `ERROR` for the final failed attempt. Failed attempts
+include the HTTP status or exception reason; retry warnings include the delay.
+
 ## Local database
 
 Use a PostgreSQL database separate from the Pricing Backend's Pricing Configuration database.
@@ -52,8 +80,9 @@ Optional transaction amounts remain SQL null when absent; supplied amounts must 
 and use increments of `0.01`. Foreign keys preserve associations without ordering columns.
 
 Unavailable Account Store connections return `503` with code `ACCOUNT_STORE_UNAVAILABLE`.
-Failed transactions leave no partial batch. Pricing Engine evaluation, wake-ups, and processing
-updates are outside this ticket; the synchronous Pricing Backend endpoint remains available.
+Failed transactions leave no partial batch and produce no wake-up. Pricing Engine evaluation and
+processing updates remain outside this server; the synchronous Pricing Backend endpoint remains
+available.
 
 ## Verification
 
@@ -69,3 +98,12 @@ round trips, generated keys, constraints, rollback, unavailable connections, unc
 exact and changed-payload duplicates, and competing submissions for the same Batch ID.
 Container tests follow the backend lifecycle and skip when Docker is absent; skipped tests are
 not PostgreSQL validation. There is no H2 fallback.
+
+Capacity tests override `BATCH_MAX_ACCOUNTS` to `5000` and check acceptance at the limit,
+rejection at `5001`, and rollback after a final-account write failure.
+
+`BatchNotificationApiTests` uses the real HTTP client against a local recording consumer, with
+PostgreSQL reads inside the consumer proving commit visibility. It checks empty POSTs, rejection
+and commit-failure suppression, acceptance before the consumer responds, immediate success,
+transient and persistent failures, configured attempt limits, retry delays, response timeouts,
+and unchanged accepted rows and processed flags. Both API suites use local HTTP consumers.

@@ -2,17 +2,31 @@ package com.pricing.mockserver.batch;
 
 import java.math.BigDecimal;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 
 import com.pricing.mockserver.generated.model.BatchAccount;
 import com.pricing.mockserver.generated.model.BatchFeeRequest;
 import com.pricing.mockserver.generated.model.BatchRequest;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 @Component
 class BatchValidator {
 
+	private final int maxAccounts;
+
+	BatchValidator(@Value("${batch.max-accounts}") int maxAccounts) {
+		this.maxAccounts = maxAccounts;
+	}
+
 	void validate(BatchRequest request) {
+		if (request.getAccounts().size() > maxAccounts) {
+			throw new IllegalArgumentException(String.format(Locale.ROOT,
+					"Pricing Batch exceeds the limit of %,d accounts (%,d submitted).",
+					maxAccounts, request.getAccounts().size()));
+		}
+
 		Map<String, Integer> accountNumbers = new HashMap<>();
 		for (int index = 0; index < request.getAccounts().size(); index++) {
 			BatchAccount account = request.getAccounts().get(index);

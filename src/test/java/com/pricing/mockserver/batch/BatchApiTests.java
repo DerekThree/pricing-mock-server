@@ -1,6 +1,9 @@
 package com.pricing.mockserver.batch;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.math.BigDecimal;
+import java.net.InetSocketAddress;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
@@ -14,12 +17,17 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
 import com.pricing.mockserver.accountattribute.AccountAttributeEntity;
+import com.sun.net.httpserver.HttpServer;
 import com.zaxxer.hikari.HikariDataSource;
 import jakarta.persistence.EntityManager;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -66,6 +74,8 @@ class BatchApiTests {
 			.withDatabaseName("account_store")
 			.withInitScript("db/account-store-test-role.sql");
 
+	private static final HttpServer PRICING_ENGINE = startPricingEngine();
+
 	@Autowired
 	private MockMvc mockMvc;
 
@@ -88,6 +98,28 @@ class BatchApiTests {
 		registry.add("spring.datasource.hikari.validation-timeout", () -> "250");
 		registry.add("spring.datasource.hikari.maximum-pool-size", () -> "2");
 		registry.add("spring.flyway.locations", () -> "classpath:db/migration");
+		registry.add("pricing-engine.wake-up-url", () ->
+				"http://localhost:" + PRICING_ENGINE.getAddress().getPort() + "/work-available");
+	}
+
+	@AfterAll
+	static void stopPricingEngine() {
+		PRICING_ENGINE.stop(0);
+	}
+
+	private static HttpServer startPricingEngine() {
+		try {
+			HttpServer server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+			server.createContext("/work-available", exchange -> {
+				try (exchange) {
+					exchange.sendResponseHeaders(204, -1);
+				}
+			});
+			server.start();
+			return server;
+		} catch (IOException ex) {
+			throw new UncheckedIOException(ex);
+		}
 	}
 
 	@AfterEach
@@ -96,6 +128,80 @@ class BatchApiTests {
 		jdbcTemplate.update("delete from account_attributes");
 		jdbcTemplate.update("delete from accounts");
 		jdbcTemplate.update("delete from batch_outbox");
+	}
+
+	@Nested
+	@SpringBootTest(properties = "BATCH_MAX_ACCOUNTS=5000")
+	class ConfiguredCapacity {
+
+		@Autowired
+		private MockMvc configuredMockMvc;
+
+		@Test
+		void acceptsTheConfiguredLimitAndRejectsOneMoreWithoutStoringIt() throws Exception {
+			UUID batchId = UUID.randomUUID();
+			configuredMockMvc.perform(post("/api/v1/batch")
+						.contentType(MediaType.APPLICATION_JSON).content(submission(batchId, 5000)))
+					.andExpect(status().isAccepted())
+					.andExpect(jsonPath("$.batchId").value(batchId.toString()));
+			assertRowCounts(1, 5000, 15000, 10000);
+			assertEquals(batchId, jdbcTemplate.queryForObject(
+					"select batch_id from batch_outbox", UUID.class));
+			assertFalse(jdbcTemplate.queryForObject(
+					"select processed from batch_outbox", Boolean.class));
+			assertEquals(5000, jdbcTemplate.queryForObject("""
+					select count(*) from accounts
+					where batch_id = ? and product_code = 'PROD001' and branch_code = 'BR001'
+					  and pricing_date = date '2026-10-21'
+					""", Integer.class, batchId));
+			assertEquals(5000, jdbcTemplate.queryForObject("""
+					select count(*) from (
+					    select account_id from account_attributes
+					    group by account_id having count(*) = 3
+					) complete_accounts
+					""", Integer.class));
+			assertEquals(5000, jdbcTemplate.queryForObject("""
+					select count(*) from (
+					    select account_id from fee_requests
+					    group by account_id having count(*) = 2
+					) complete_accounts
+					""", Integer.class));
+
+			configuredMockMvc.perform(post("/api/v1/batch")
+						.contentType(MediaType.APPLICATION_JSON)
+						.content(submission(UUID.randomUUID(), 5001)))
+					.andExpect(status().isBadRequest())
+					.andExpect(jsonPath("$.code").value("INVALID_BATCH"))
+					.andExpect(jsonPath("$.message").value(
+							"Pricing Batch exceeds the limit of 5,000 accounts (5,001 submitted)."));
+			assertRowCounts(1, 5000, 15000, 10000);
+		}
+
+		@Test
+		void rollsBackTheConfiguredBatchWhenTheLastAccountCannotBeStored() throws Exception {
+			jdbcTemplate.execute("""
+					create function reject_last_account_write() returns trigger language plpgsql as $$
+					begin
+					    raise exception 'Account Store write unavailable' using errcode = '08006';
+					end;
+					$$
+					""");
+			jdbcTemplate.execute("""
+					create trigger reject_last_account_write before insert on accounts
+					for each row when (new.account_number = 'ACCOUNT4999')
+					execute function reject_last_account_write()
+					""");
+			try {
+				configuredMockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+							.content(submission(UUID.randomUUID(), 5000)))
+						.andExpect(status().isServiceUnavailable())
+						.andExpect(jsonPath("$.code").value("ACCOUNT_STORE_UNAVAILABLE"));
+				assertRowCounts(0, 0, 0, 0);
+			} finally {
+				jdbcTemplate.execute("drop trigger reject_last_account_write on accounts");
+				jdbcTemplate.execute("drop function reject_last_account_write()");
+			}
+		}
 	}
 
 	@ParameterizedTest
@@ -283,6 +389,7 @@ class BatchApiTests {
 				.andExpect(content().string(org.hamcrest.Matchers.containsString(
 						"title: Mock Account Processor API")))
 				.andExpect(content().string(containsString("'409':")))
+				.andExpect(content().string(containsString("BATCH_MAX_ACCOUNTS")))
 				.andExpect(content().string(containsString("BATCH_ALREADY_ACCEPTED")));
 	}
 
@@ -756,10 +863,12 @@ class BatchApiTests {
 	}
 
 	private static String submission(UUID batchId) {
-		return """
+		return submission(batchId, 1);
+	}
+
+	private static String submission(UUID batchId, int accountCount) {
+		String account = """
 				{
-				  "batchId": "%s",
-				  "accounts": [{
 				    "accountNumber": "ACC001", "productCode": "PROD001",
 				    "branchCode": "BR001", "pricingDate": "2026-10-21",
 				    "attributes": [
@@ -769,8 +878,12 @@ class BatchApiTests {
 				    ],
 				    "fees": [{"feeRequestId": 7, "code": "FEE001", "transactionAmount": 12.34},
 				             {"feeRequestId": 8, "code": "FEE002"}]
-				  }]
-				}
-				""".formatted(batchId);
+				  }
+				""";
+		String accounts = IntStream.range(0, accountCount)
+				.mapToObj(index -> account.replace("ACC001",
+						index == 0 ? "ACC001" : "ACCOUNT" + index))
+				.collect(Collectors.joining(","));
+		return "{\"batchId\": \"" + batchId + "\", \"accounts\": [" + accounts + "]}";
 	}
 }
