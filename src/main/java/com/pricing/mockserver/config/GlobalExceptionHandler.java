@@ -25,6 +25,7 @@ import tools.jackson.core.TokenStreamLocation;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
+	private static final String BATCH_OUTBOX_PRIMARY_KEY = "batch_outbox_pkey";
 	private static final String ACCOUNT_NUMBER_UNIQUE_CONSTRAINT = "uk_accounts_batch_account_number";
 	private static final String FEE_REQUEST_ID_UNIQUE_CONSTRAINT =
 			"uk_fee_requests_account_fee_request_id";
@@ -88,6 +89,12 @@ public class GlobalExceptionHandler {
 	@ExceptionHandler(DataIntegrityViolationException.class)
 	public ResponseEntity<ErrorResponse> handleDataIntegrityViolation(
 			DataIntegrityViolationException ex) {
+		if (hasConstraint(ex, BATCH_OUTBOX_PRIMARY_KEY, UNIQUE_VIOLATION)) {
+			return ResponseEntity.status(HttpStatus.CONFLICT)
+					.body(new ErrorResponse("BATCH_ALREADY_ACCEPTED", databaseMessage(ex,
+							"This Pricing Batch has already been accepted")));
+		}
+
 		if (hasConstraint(ex, ACCOUNT_NUMBER_UNIQUE_CONSTRAINT, UNIQUE_VIOLATION)) {
 			return badRequest(databaseMessage(ex,
 					"Account numbers must be unique within the Pricing Batch"));

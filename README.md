@@ -6,6 +6,10 @@ transaction before returning `202` with `batchId` and an acceptance message.
 The controller delegates to `BatchService`, which validates submissions and owns the transaction.
 `BatchRepository` persists the batch with its owned accounts, attributes, and Fee Requests through
 JPA cascades, following the backend's owned-child mappings.
+Batch identity uses insert-only persistence and the PostgreSQL outbox primary key. A repeated
+`batchId` returns `409` with code `BATCH_ALREADY_ACCEPTED` and a message identifying the batch,
+regardless of payload differences. Concurrent requests can accept only one batch for that ID;
+rejected transactions preserve all accepted rows, including the outbox's `processed` flag.
 
 ## Local database
 
@@ -61,6 +65,7 @@ Docker and Java 21 are required:
 
 The PostgreSQL 16 Testcontainers API suite uses dynamic datasource configuration, Flyway, and an
 ordinary application login for migration and runtime access. It checks committed rows, scalar
-round trips, generated keys, constraints, rollback, and unavailable connections. Container tests
-follow the backend lifecycle and skip when Docker is absent; skipped tests are not PostgreSQL
-validation. There is no H2 fallback.
+round trips, generated keys, constraints, rollback, unavailable connections, unchanged work after
+exact and changed-payload duplicates, and competing submissions for the same Batch ID.
+Container tests follow the backend lifecycle and skip when Docker is absent; skipped tests are
+not PostgreSQL validation. There is no H2 fallback.

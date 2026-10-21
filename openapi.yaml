@@ -29,6 +29,17 @@ paths:
                 $ref: '#/components/schemas/BatchAcceptance'
         '400':
           $ref: '#/components/responses/Error'
+        '409':
+          description: >-
+            BATCH_ALREADY_ACCEPTED. This batch ID has already been accepted, regardless of
+            payload differences. The accepted batch remains unchanged.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                code: BATCH_ALREADY_ACCEPTED
+                message: This Pricing Batch has already been accepted.
         '503':
           $ref: '#/components/responses/Error'
 components:

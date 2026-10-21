@@ -5,9 +5,15 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 import com.pricing.mockserver.accountattribute.AccountAttributeEntity;
@@ -29,6 +35,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -89,6 +96,90 @@ class BatchApiTests {
 		jdbcTemplate.update("delete from account_attributes");
 		jdbcTemplate.update("delete from accounts");
 		jdbcTemplate.update("delete from batch_outbox");
+	}
+
+	@ParameterizedTest
+	@ValueSource(booleans = {false, true})
+	void rejectsAcceptedIdentityWithoutChangingStoredWork(boolean changePayload) throws Exception {
+		UUID batchId = UUID.randomUUID();
+		String request = submission(batchId);
+		mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+				.content(request)).andExpect(status().isAccepted());
+		jdbcTemplate.update("update batch_outbox set processed = true where batch_id = ?", batchId);
+		List<List<Map<String, Object>>> accepted = storedWork();
+
+		String repeated = changePayload ? request.replace("ACC001", "ACC002")
+				.replace("PROD001", "PROD002").replace("BR001", "BR002")
+				.replace("2026-10-21", "2026-10-22").replace("BALANCE", "CHANGED")
+				.replace("12345678901234567890.123456789", "10.25")
+				.replace("00123.40", "different").replace("true", "false")
+				.replace("FEE001", "FEE003").replace("12.34", "56.78")
+				.replace("\"feeRequestId\": 7", "\"feeRequestId\": 9") : request;
+		mockMvc.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+				.content(repeated))
+				.andExpect(status().isConflict())
+				.andExpect(jsonPath("$.code").value("BATCH_ALREADY_ACCEPTED"))
+				.andExpect(jsonPath("$.message", containsString("already been accepted")))
+				.andExpect(jsonPath("$.message", containsString(batchId.toString())));
+
+		assertEquals(accepted, storedWork());
+		assertRowCounts(1, 1, 3, 2);
+	}
+
+	@Test
+	void acceptsOneConcurrentSubmissionPerBatchIdentity() throws Exception {
+		UUID sharedId = UUID.randomUUID();
+		List<UUID> batchIds = List.of(sharedId, sharedId, sharedId, sharedId,
+				UUID.randomUUID(), UUID.randomUUID());
+		CountDownLatch ready = new CountDownLatch(batchIds.size());
+		CountDownLatch start = new CountDownLatch(1);
+		List<Future<MvcResult>> responses = new ArrayList<>();
+		try (ExecutorService executor = Executors.newFixedThreadPool(batchIds.size())) {
+			for (int index = 0; index < batchIds.size(); index++) {
+				String request = submission(batchIds.get(index))
+						.replace("ACC001", "ACC00" + index);
+				responses.add(executor.submit(() -> {
+					ready.countDown();
+					assertTrue(start.await(10, TimeUnit.SECONDS));
+					return mockMvc.perform(post("/api/v1/batch")
+							.contentType(MediaType.APPLICATION_JSON).content(request)).andReturn();
+				}));
+			}
+			assertTrue(ready.await(10, TimeUnit.SECONDS));
+			start.countDown();
+
+			int sharedAccepted = 0;
+			for (int index = 0; index < responses.size(); index++) {
+				MvcResult response = responses.get(index).get(30, TimeUnit.SECONDS);
+				UUID batchId = batchIds.get(index);
+				if (response.getResponse().getStatus() == 202) {
+					jsonPath("$.batchId").value(batchId.toString()).match(response);
+					jsonPath("$.message").value("Pricing Batch accepted").match(response);
+					assertEquals("ACC00" + index, jdbcTemplate.queryForObject(
+							"select account_number from accounts where batch_id = ?",
+							String.class, batchId));
+					if (batchId.equals(sharedId)) {
+						sharedAccepted++;
+					}
+				} else {
+					assertEquals(sharedId, batchId);
+					status().isConflict().match(response);
+					jsonPath("$.code").value("BATCH_ALREADY_ACCEPTED").match(response);
+					jsonPath("$.message", containsString("already been accepted")).match(response);
+					jsonPath("$.message", containsString(batchId.toString())).match(response);
+				}
+			}
+			assertEquals(1, sharedAccepted);
+		}
+		assertRowCounts(3, 3, 9, 6);
+		assertEquals(3, jdbcTemplate.queryForObject("""
+				select count(*) from accounts account
+				where (select count(*) from account_attributes
+				       where account_id = account.id) = 3
+				  and (select count(*) from fee_requests where account_id = account.id) = 2
+				""", Integer.class));
+		assertEquals(0, jdbcTemplate.queryForObject(
+				"select count(*) from batch_outbox where processed", Integer.class));
 	}
 
 	@Test
@@ -190,7 +281,9 @@ class BatchApiTests {
 		mockMvc.perform(get("/openapi.yaml"))
 				.andExpect(status().isOk())
 				.andExpect(content().string(org.hamcrest.Matchers.containsString(
-						"title: Mock Account Processor API")));
+						"title: Mock Account Processor API")))
+				.andExpect(content().string(containsString("'409':")))
+				.andExpect(content().string(containsString("BATCH_ALREADY_ACCEPTED")));
 	}
 
 	@Test
@@ -500,6 +593,14 @@ class BatchApiTests {
 				values (?, 7, 'FEE', 0)
 				""", secondAccount);
 		assertRowCounts(1, 2, 3, 3);
+	}
+
+	private List<List<Map<String, Object>>> storedWork() {
+		return List.of(
+				jdbcTemplate.queryForList("select * from batch_outbox order by batch_id"),
+				jdbcTemplate.queryForList("select * from accounts order by id"),
+				jdbcTemplate.queryForList("select * from account_attributes order by id"),
+				jdbcTemplate.queryForList("select * from fee_requests order by id"));
 	}
 
 	private void assertRowCounts(int batches, int accounts, int attributes, int fees) {
