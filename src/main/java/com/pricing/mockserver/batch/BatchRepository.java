@@ -17,4 +17,13 @@ public class BatchRepository {
 	public void save(BatchOutboxEntity batch) {
 		entityManager.persist(batch);
 	}
+
+	@Transactional(readOnly = true)
+	public boolean existsByProcessedFalse() {
+		return !entityManager.createQuery("""
+				select 1 from BatchOutboxEntity batch where batch.processed = false
+				""", Integer.class)
+				.setMaxResults(1)
+				.getResultList().isEmpty();
+	}
 }

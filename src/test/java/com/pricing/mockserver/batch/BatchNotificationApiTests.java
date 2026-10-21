@@ -5,6 +5,7 @@ import java.io.UncheckedIOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -15,6 +16,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import com.pricing.mockserver.MockServerApplication;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -24,13 +26,17 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.context.WebApplicationContext;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -203,6 +209,104 @@ class BatchNotificationApiTests {
 		}
 	}
 
+	@Test
+	void recoversPendingWorkAfterThePreviousInstanceExhaustedDelivery() throws Exception {
+		responses = new int[] {503};
+		List<List<Map<String, Object>>> accepted;
+		try (ConfigurableApplicationContext application = startApplication()) {
+			acceptBatch(application);
+			assertAttempts(3);
+			accepted = storedWork(jdbcTemplate);
+		}
+		WAKE_UPS.clear();
+		responses = new int[] {204};
+		try (ConfigurableApplicationContext application = startApplication()) {
+			assertAttempts(1);
+			assertEquals(accepted, storedWork(jdbcTemplate));
+			WakeUp wakeUp = WAKE_UPS.getFirst();
+			assertEquals("POST", wakeUp.method());
+			assertEquals("/work-available", wakeUp.path());
+			assertNull(wakeUp.query());
+			assertEquals("", wakeUp.body());
+		}
+	}
+
+	@ParameterizedTest
+	@ValueSource(booleans = {false, true})
+	void doesNotRecoverAnEmptyStoreOrOnlyProcessedRows(boolean processedRows) throws Exception {
+		List<List<Map<String, Object>>> accepted;
+		try (ConfigurableApplicationContext application = startApplication()) {
+			if (processedRows) {
+				acceptBatch(application);
+				assertAttempts(1);
+				jdbcTemplate.update("update batch_outbox set processed = true");
+			}
+			accepted = storedWork(jdbcTemplate);
+		}
+		WAKE_UPS.clear();
+		try (ConfigurableApplicationContext application = startApplication()) {
+			await().during(Duration.ofMillis(700)).atMost(Duration.ofSeconds(2))
+					.untilAsserted(() -> assertEquals(0, WAKE_UPS.size()));
+			assertEquals(accepted, storedWork(jdbcTemplate));
+		}
+	}
+
+	@Test
+	void stopsRecoveryAfterATransientFailureSucceeds() throws Exception {
+		List<List<Map<String, Object>>> accepted;
+		try (ConfigurableApplicationContext application = startApplication()) {
+			acceptBatch(application);
+			assertAttempts(1);
+			accepted = storedWork(jdbcTemplate);
+		}
+		WAKE_UPS.clear();
+		responses = new int[] {503, 204};
+		try (ConfigurableApplicationContext application = startApplication()) {
+			assertAttempts(2);
+			assertEquals(accepted, storedWork(jdbcTemplate));
+		}
+	}
+
+	@Test
+	void boundsRecoveryFailureAndRediscoversWorkOnAnotherRestart() throws Exception {
+		List<List<Map<String, Object>>> accepted;
+		try (ConfigurableApplicationContext application = startApplication()) {
+			acceptBatch(application);
+			assertAttempts(1);
+			accepted = storedWork(jdbcTemplate);
+		}
+		responses = new int[] {503};
+		for (int restart = 0; restart < 2; restart++) {
+			WAKE_UPS.clear();
+			try (ConfigurableApplicationContext application = startApplication()) {
+				assertAttempts(3);
+				assertEquals(accepted, storedWork(jdbcTemplate));
+			}
+		}
+	}
+
+	@Test
+	void recoveryUsesTheConfiguredAttemptLimitDelayAndTimeout() throws Exception {
+		List<List<Map<String, Object>>> accepted;
+		try (ConfigurableApplicationContext application = startApplication()) {
+			acceptBatch(application);
+			assertAttempts(1);
+			accepted = storedWork(jdbcTemplate);
+		}
+		WAKE_UPS.clear();
+		responseDelayMillis = 1500;
+		try (ConfigurableApplicationContext application = startApplication(
+				"--pricing-engine.max-attempts=2", "--pricing-engine.retry-delay=150ms",
+				"--pricing-engine.http-timeout=75ms")) {
+			assertAttempts(2);
+			Duration interval = Duration.ofNanos(
+					WAKE_UPS.get(1).receivedAt() - WAKE_UPS.get(0).receivedAt());
+			assertTrue(interval.compareTo(Duration.ofMillis(200)) >= 0);
+			assertTrue(interval.compareTo(Duration.ofMillis(600)) < 0);
+			assertEquals(accepted, storedWork(jdbcTemplate));
+		}
+	}
+
 	@Nested
 	@SpringBootTest(properties = {
 			"PRICING_ENGINE_MAX_ATTEMPTS=2", "PRICING_ENGINE_RETRY_DELAY=150ms",
@@ -236,6 +340,27 @@ class BatchNotificationApiTests {
 			assertTrue(interval.compareTo(Duration.ofMillis(200)) >= 0);
 			assertTrue(interval.compareTo(Duration.ofMillis(600)) < 0);
 		}
+	}
+
+	private ConfigurableApplicationContext startApplication(String... properties) {
+		List<String> arguments = new ArrayList<>(List.of(
+				"--server.port=0",
+				"--spring.datasource.url=" + POSTGRES.getJdbcUrl(),
+				"--spring.datasource.username=account_app",
+				"--spring.datasource.password=account_test",
+				"--pricing-engine.wake-up-url=http://localhost:"
+						+ PRICING_ENGINE.getAddress().getPort() + "/work-available",
+				"--PRICING_ENGINE_RETRY_DELAY=50ms", "--PRICING_ENGINE_HTTP_TIMEOUT=500ms"));
+		arguments.addAll(List.of(properties));
+		return new SpringApplicationBuilder(MockServerApplication.class)
+				.run(arguments.toArray(String[]::new));
+	}
+
+	private void acceptBatch(ConfigurableApplicationContext application) throws Exception {
+		MockMvcBuilders.webAppContextSetup((WebApplicationContext) application).build()
+				.perform(post("/api/v1/batch").contentType(MediaType.APPLICATION_JSON)
+						.content(submission(UUID.randomUUID())))
+				.andExpect(status().isAccepted());
 	}
 
 	private void assertAttempts(int count) {

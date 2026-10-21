@@ -33,7 +33,13 @@ The submission returns `202` without waiting for the consumer or delivery retrie
 Any `2xx` response ends the sequence. Other statuses, connection errors, and timeouts consume
 an attempt. Retries remain in memory and stop after the configured total attempt limit.
 Delivery failure does not become `ACCOUNT_STORE_UNAVAILABLE` or change accepted rows or
-`processed`. No notification-delivery state is persisted. Startup recovery belongs to issue 06.
+`processed`. No notification-delivery state is persisted.
+
+On startup or restart, `BatchService` checks through `BatchRepository` for unprocessed Batch
+Outbox rows once the application is ready. If any exist, it starts the same bounded HTTP delivery
+on a virtual thread, using the configured endpoint, timeouts, retry delay, and attempt limit.
+An empty store or only processed rows produces no recovery wake-up. Recovery leaves all stored
+rows unchanged, performs no continuous polling, and can send duplicate wake-ups on later restarts.
 
 Delivery logs use `INFO` for an acknowledged wake-up, `WARN` for failed attempts with retries
 remaining or an interrupted retry, and `ERROR` for the final failed attempt. Failed attempts
@@ -106,4 +112,6 @@ rejection at `5001`, and rollback after a final-account write failure.
 PostgreSQL reads inside the consumer proving commit visibility. It checks empty POSTs, rejection
 and commit-failure suppression, acceptance before the consumer responds, immediate success,
 transient and persistent failures, configured attempt limits, retry delays, response timeouts,
-and unchanged accepted rows and processed flags. Both API suites use local HTTP consumers.
+and unchanged accepted rows and processed flags. Restart tests close and reopen application
+contexts against retained PostgreSQL data, including after exhausted delivery, and verify no
+recovery for empty or processed-only stores. Both API suites use local HTTP consumers.

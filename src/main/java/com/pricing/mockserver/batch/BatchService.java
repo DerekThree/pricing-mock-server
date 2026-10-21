@@ -7,6 +7,8 @@ import com.pricing.mockserver.generated.model.BatchRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.stereotype.Service;
 import org.springframework.util.Assert;
@@ -47,6 +49,13 @@ public class BatchService {
 		log.info("Pricing Batch stored: {}", request.getBatchId());
 		Thread.startVirtualThread(this::notifyPricingEngine);
 		return new BatchAcceptance(request.getBatchId(), "Pricing Batch accepted");
+	}
+
+	@EventListener(ApplicationReadyEvent.class)
+	public void recoverPendingBatches() {
+		if (batchRepository.existsByProcessedFalse()) {
+			Thread.startVirtualThread(this::notifyPricingEngine);
+		}
 	}
 
 	public void notifyPricingEngine() {
