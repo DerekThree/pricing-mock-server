@@ -1,0 +1,170 @@
+openapi: 3.0.3
+info:
+  title: Mock Account Processor API
+  description: Accept and durably store complete Pricing Batches in the Account Store.
+  version: 1.0.0
+servers:
+  - url: http://localhost:8081
+    description: Local development server
+tags:
+  - name: Batch
+paths:
+  /api/v1/batch:
+    post:
+      tags: [Batch]
+      operationId: postBatch
+      summary: Accept a Pricing Batch after durable commit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchRequest'
+      responses:
+        '202':
+          description: The complete Pricing Batch and pending Batch Outbox row are committed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchAcceptance'
+        '400':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+components:
+  responses:
+    Error:
+      description: Descriptive submission error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    BatchAcceptance:
+      type: object
+      required: [batchId, message]
+      properties:
+        batchId:
+          type: string
+          format: uuid
+        message:
+          type: string
+    ErrorResponse:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          example: ACCOUNT_STORE_UNAVAILABLE
+        message:
+          type: string
+
+    BatchRequest:
+      type: object
+      required:
+        - batchId
+        - accounts
+      properties:
+        batchId:
+          type: string
+          format: uuid
+        accounts:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/BatchAccount"
+
+    BatchAccount:
+      type: object
+      required:
+        - accountNumber
+        - productCode
+        - branchCode
+        - pricingDate
+        - attributes
+        - fees
+      properties:
+        accountNumber:
+          $ref: "#/components/schemas/AccountNumber"
+        productCode:
+          $ref: "#/components/schemas/ProductCode"
+        branchCode:
+          $ref: "#/components/schemas/BranchCode"
+        pricingDate:
+          type: string
+          format: date
+        attributes:
+          type: array
+          items:
+            $ref: "#/components/schemas/AccountAttribute"
+        fees:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/BatchFeeRequest"
+
+    AccountAttribute:
+      type: object
+      required:
+        - code
+        - value
+      properties:
+        code:
+          $ref: "#/components/schemas/AttributeCode"
+        value:
+          $ref: "#/components/schemas/AccountAttributeValue"
+
+    BatchFeeRequest:
+      type: object
+      required:
+        - feeRequestId
+        - code
+      properties:
+        feeRequestId:
+          $ref: "#/components/schemas/Id"
+        code:
+          $ref: "#/components/schemas/FeeCode"
+        transactionAmount:
+          type: number
+          minimum: 0
+          multipleOf: 0.01
+          x-setter-extra-annotation: >-
+            @com.fasterxml.jackson.annotation.JsonSetter(
+            nulls = com.fasterxml.jackson.annotation.Nulls.FAIL)
+
+    AccountAttributeValue:
+      oneOf:
+        - type: string
+        - type: number
+        - type: boolean
+
+    Id:
+      type: integer
+      format: int64
+      example: 1
+
+    AccountNumber:
+      type: string
+      minLength: 1
+      maxLength: 25
+      pattern: "^[A-Z0-9]{1,25}$"
+
+    ProductCode:
+      type: string
+      pattern: "^[A-Z0-9]{1,25}$"
+      example: 1FC00012
+
+    BranchCode:
+      type: string
+      pattern: "^[A-Z0-9]{1,25}$"
+      example: "10000001"
+
+    AttributeCode:
+      type: string
+      pattern: "^[A-Z0-9]{1,25}$"
+      example: ATTR0001
+
+    FeeCode:
+      type: string
+      pattern: "^[A-Z0-9]{1,25}$"
+      example: FEE00001
