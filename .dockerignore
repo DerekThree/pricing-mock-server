@@ -1,0 +1,10 @@
+.git
+.gitignore
+.gitattributes
+target/
+.env
+.env.*
+README.md
+HELP.md
+graphify-out/
+mvnw.cmd

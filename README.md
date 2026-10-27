@@ -52,6 +52,11 @@ include the HTTP status or exception reason; retry warnings include the delay.
 ## Local database
 
 Use a PostgreSQL database separate from the Pricing Backend's Pricing Configuration database.
+The main repository's `deploy/local/compose.yaml` hosts both databases in one PostgreSQL container
+and starts all four application containers. Run `deploy/setup.ps1` from that repository for local
+or AWS startup. Local passwords are stored in `deploy/local/.env`; `ACCOUNT_PASSWORD` is used by
+this server. The shared initialization script creates `accountdb` and `accountuser` before startup.
+
 For local development, an administrator can create its application login and database:
 
 ```sql
@@ -78,6 +83,11 @@ From this directory:
 The default port is `8081` (`SERVER_PORT` overrides it). The provider-owned contract is
 `openapi.yaml`, served at `/openapi.yaml`, with Swagger UI at `/docs`. Maven generates API
 interfaces and models in `com.pricing.mockserver.generated`, independently of the backend.
+
+The Dockerfile follows the Backend's Java 21 multistage Maven build. `GET /actuator/health`
+reports application/database health without exposing internal details. Compose and AWS use
+this endpoint for health checks. In AWS, a one-off Fargate task initializes the Account Store
+on the existing RDS instance before this service starts; ECS supplies its password from Secrets Manager.
 
 ## Account Store
 
