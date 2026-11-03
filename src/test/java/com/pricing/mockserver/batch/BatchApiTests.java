@@ -59,8 +59,10 @@ import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.emptyOrNullString;
 import static org.hamcrest.Matchers.not;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -128,6 +130,29 @@ class BatchApiTests {
 		jdbcTemplate.update("delete from account_attributes");
 		jdbcTemplate.update("delete from accounts");
 		jdbcTemplate.update("delete from batch_outbox");
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = { "http://localhost:5173", "http://127.0.0.1:5174" })
+	void permitsLocalBrowserSubmissions(String origin) throws Exception {
+		mockMvc.perform(options("/api/v1/mock/acc/batch")
+				.header("Origin", origin)
+				.header("Access-Control-Request-Method", "POST")
+				.header("Access-Control-Request-Headers", "content-type"))
+				.andExpect(status().isOk())
+				.andExpect(header().string("Access-Control-Allow-Origin", origin))
+				.andExpect(header().string("Access-Control-Allow-Credentials", "true"))
+				.andExpect(header().string("Access-Control-Allow-Methods", containsString("POST")))
+				.andExpect(header().string("Access-Control-Allow-Headers", "content-type"));
+	}
+
+	@Test
+	void rejectsOtherBrowserOrigins() throws Exception {
+		mockMvc.perform(options("/api/v1/mock/acc/batch")
+				.header("Origin", "https://example.com")
+				.header("Access-Control-Request-Method", "POST"))
+				.andExpect(status().isForbidden())
+				.andExpect(header().doesNotExist("Access-Control-Allow-Origin"));
 	}
 
 	@Nested
