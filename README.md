@@ -20,6 +20,35 @@ Set it before starting the server; no submission contract change is required.
 Submissions above this limit return `400 INVALID_BATCH` with the configured limit and
 submitted count in the message, before any rows are stored.
 
+## API contract ownership and compatibility
+
+The Mock Account Processor owns `openapi.yaml` (currently API version `1.0.0`) and
+publishes it at `/openapi.yaml`. The Dashboard is a consumer: it generates its API client
+from this provider-owned contract rather than independently defining request or response
+models. The path `POST /api/v1/mock/acc/batch` is the supported v1 submission contract.
+
+- **Compatible v1 changes:** documentation clarifications, or additive optional request
+  fields whose absence preserves existing behavior. An optional response field may also be
+  compatible if the current generated Dashboard client tolerates unknown fields. Compatibility
+  must be verified against consumers; adding a field is not automatically safe.
+- **Breaking changes:** renaming or removing `BatchRequest.batchId` or `accounts`, changing
+  their types, making optional fields required, narrowing accepted values, renaming the
+  required `BatchAcceptance.batchId` or `message`, changing the `202` acceptance status,
+  or removing or changing the `409 BATCH_ALREADY_ACCEPTED` error contract. These require a
+  new major API version rather than changing v1 in place.
+- **Versioned migration:** introduce breaking changes in a separately documented v2
+  endpoint/contract (for example, `/api/v2/mock/acc/batch`; this endpoint does not exist
+  yet). Keep the existing v1 endpoint and semantics available while Dashboard and any other
+  clients migrate. Announce the contract differences and migration steps to consumers,
+  deploy the new provider version before switching clients, and regenerate clients against
+  the intended version. Deprecate and retire v1 only after known consumers have migrated,
+  the transition has been communicated, and the agreed support window has elapsed.
+- **Release checks:** review an OpenAPI diff for compatibility before merging any provider
+  contract change. Generate and compile the provider interfaces, run its PostgreSQL-backed
+  API tests, regenerate and compile the Dashboard client, and validate its submission flow
+  against the targeted API version. Include the `202` acceptance and `409` duplicate-batch
+  behavior. During a v2 migration, keep regression tests for v1 until v1 is retired.
+
 ## Pricing Engine wake-ups
 
 After transactional `BatchRepository.save` returns with the transaction committed,
