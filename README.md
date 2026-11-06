@@ -58,7 +58,7 @@ The submission returns `202` without waiting for the consumer or delivery retrie
 
 | Configuration variable | Default | Purpose |
 | --- | --- | --- |
-| `PRICING_ENGINE_WAKE_UP_URL` | `http://localhost:8082/api/v1/work-available` | Consumer endpoint |
+| `ENGINE_WAKE_UP_URL` | `http://localhost:8082/api/v1/work-available` | Consumer endpoint |
 | `PRICING_ENGINE_MAX_ATTEMPTS` | `3` | Total requests, including the initial attempt |
 | `PRICING_ENGINE_HTTP_TIMEOUT` | `2s` | Connection and response-read timeout |
 | `PRICING_ENGINE_RETRY_DELAY` | `1s` | Delay between failed attempts |

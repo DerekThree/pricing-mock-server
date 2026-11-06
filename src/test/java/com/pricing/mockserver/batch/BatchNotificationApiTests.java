@@ -3,6 +3,10 @@ package com.pricing.mockserver.batch;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.InetSocketAddress;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -15,9 +19,11 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import com.pricing.mockserver.MockServerApplication;
 import com.sun.net.httpserver.HttpServer;
+import com.zaxxer.hikari.HikariDataSource;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -34,18 +40,18 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
-import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.reset;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -54,13 +60,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 		"PRICING_ENGINE_RETRY_DELAY=50ms", "PRICING_ENGINE_HTTP_TIMEOUT=500ms"
 })
 @AutoConfigureMockMvc
-@Testcontainers(disabledWithoutDocker = true)
 class BatchNotificationApiTests {
 
-	@Container
-	private static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16")
-			.withDatabaseName("account_store")
-			.withInitScript("db/account-store-test-role.sql");
+	private static final String DATABASE_URL =
+			"jdbc:h2:mem:batch-notifications;DATABASE_TO_LOWER=TRUE;NON_KEYWORDS=VALUE"
+					+ ";DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE";
 
 	private static final ExecutorService HTTP_EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
 	private static final List<WakeUp> WAKE_UPS = new CopyOnWriteArrayList<>();
@@ -77,11 +81,18 @@ class BatchNotificationApiTests {
 	@Autowired
 	private JdbcTemplate jdbcTemplate;
 
+	@MockitoSpyBean
+	private HikariDataSource dataSource;
+
 	@DynamicPropertySource
 	static void configureProperties(DynamicPropertyRegistry registry) {
-		registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
-		registry.add("spring.datasource.username", () -> "account_app");
-		registry.add("spring.datasource.password", () -> "account_test");
+		registry.add("spring.datasource.url", () -> DATABASE_URL);
+		registry.add("spring.datasource.username", () -> "sa");
+		registry.add("spring.datasource.password", () -> "");
+		registry.add("spring.datasource.driver-class-name", () -> "org.h2.Driver");
+		registry.add("spring.flyway.enabled", () -> "false");
+		registry.add("spring.sql.init.mode", () -> "always");
+		registry.add("spring.sql.init.schema-locations", () -> "classpath:db/account-store-h2.sql");
 		registry.add("pricing-engine.wake-up-url", () ->
 				"http://localhost:" + PRICING_ENGINE.getAddress().getPort() + "/work-available");
 	}
@@ -184,28 +195,33 @@ class BatchNotificationApiTests {
 				.content(submission(batchId)))
 				.andExpect(status().isConflict());
 
-		jdbcTemplate.execute("""
-				create function reject_batch_commit() returns trigger language plpgsql as $$
-				begin
-				    raise exception 'Account Store commit unavailable' using errcode = '08006';
-				end;
-				$$
-				""");
-		jdbcTemplate.execute("""
-				create constraint trigger reject_batch_commit after insert on batch_outbox
-				deferrable initially deferred for each row execute function reject_batch_commit()
-				""");
+		AtomicBoolean failCommit = new AtomicBoolean(true);
+		doAnswer(invocation -> {
+			Connection connection = (Connection) invocation.callRealMethod();
+			return Proxy.newProxyInstance(Connection.class.getClassLoader(),
+					new Class<?>[] {Connection.class}, (proxy, method, arguments) -> {
+						if (method.getName().equals("commit")
+								&& failCommit.compareAndSet(true, false)) {
+							throw new SQLException("Account Store commit unavailable", "08006");
+						}
+						try {
+							return method.invoke(connection, arguments);
+						} catch (InvocationTargetException failure) {
+							throw failure.getCause();
+						}
+					});
+		}).when(dataSource).getConnection();
 		try {
 			mockMvc.perform(post("/api/v1/mock/acc/batch").contentType(MediaType.APPLICATION_JSON)
 					.content(submission(UUID.randomUUID())))
 					.andExpect(status().isServiceUnavailable())
 					.andExpect(jsonPath("$.code").value("ACCOUNT_STORE_UNAVAILABLE"));
+			assertFalse(failCommit.get());
 			await().during(Duration.ofMillis(700)).atMost(Duration.ofSeconds(2))
 					.untilAsserted(() -> assertEquals(1, WAKE_UPS.size()));
 			assertEquals(accepted, storedWork(jdbcTemplate));
 		} finally {
-			jdbcTemplate.execute("drop trigger reject_batch_commit on batch_outbox");
-			jdbcTemplate.execute("drop function reject_batch_commit()");
+			reset(dataSource);
 		}
 	}
 
@@ -345,9 +361,12 @@ class BatchNotificationApiTests {
 	private ConfigurableApplicationContext startApplication(String... properties) {
 		List<String> arguments = new ArrayList<>(List.of(
 				"--server.port=0",
-				"--spring.datasource.url=" + POSTGRES.getJdbcUrl(),
-				"--spring.datasource.username=account_app",
-				"--spring.datasource.password=account_test",
+				"--spring.datasource.url=" + DATABASE_URL,
+				"--spring.datasource.username=sa",
+				"--spring.datasource.password=",
+				"--spring.datasource.driver-class-name=org.h2.Driver",
+				"--spring.flyway.enabled=false", "--spring.sql.init.mode=always",
+				"--spring.sql.init.schema-locations=classpath:db/account-store-h2.sql",
 				"--pricing-engine.wake-up-url=http://localhost:"
 						+ PRICING_ENGINE.getAddress().getPort() + "/work-available",
 				"--PRICING_ENGINE_RETRY_DELAY=50ms", "--PRICING_ENGINE_HTTP_TIMEOUT=500ms"));
