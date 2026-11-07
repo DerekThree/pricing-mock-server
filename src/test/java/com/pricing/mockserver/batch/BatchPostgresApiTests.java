@@ -23,6 +23,7 @@ import java.util.stream.Stream;
 import com.pricing.mockserver.accountattribute.AccountAttributeEntity;
 import com.sun.net.httpserver.HttpServer;
 import jakarta.persistence.EntityManager;
+import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -36,6 +37,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -68,6 +70,7 @@ class BatchPostgresApiTests {
 			.withInitScript("db/account-store-test-role.sql");
 
 	private static final HttpServer PRICING_ENGINE = startPricingEngine();
+	private static JdbcTemplate initialization;
 
 	@Autowired
 	private MockMvc mockMvc;
@@ -80,6 +83,14 @@ class BatchPostgresApiTests {
 
 	@DynamicPropertySource
 	static void configureProperties(DynamicPropertyRegistry registry) {
+		Flyway.configure().dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(),
+				POSTGRES.getPassword())
+				.locations("classpath:db/account", "classpath:db/account-postgresql")
+				.placeholders(Map.of("mockServerLogin", "account_app",
+						"engineLogin", "accountdb_engine", "accountDatabase", POSTGRES.getDatabaseName()))
+				.load().migrate();
+		initialization = new JdbcTemplate(new DriverManagerDataSource(POSTGRES.getJdbcUrl(),
+				POSTGRES.getUsername(), POSTGRES.getPassword()));
 		registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
 		registry.add("spring.datasource.username", () -> "account_app");
 		registry.add("spring.datasource.password", () -> "account_test");
@@ -87,7 +98,6 @@ class BatchPostgresApiTests {
 		registry.add("spring.datasource.hikari.connection-timeout", () -> "500");
 		registry.add("spring.datasource.hikari.validation-timeout", () -> "250");
 		registry.add("spring.datasource.hikari.maximum-pool-size", () -> "2");
-		registry.add("spring.flyway.locations", () -> "classpath:db/migration");
 		registry.add("pricing-engine.wake-up-url", () ->
 				"http://localhost:" + PRICING_ENGINE.getAddress().getPort() + "/work-available");
 	}
@@ -114,10 +124,10 @@ class BatchPostgresApiTests {
 
 	@AfterEach
 	void cleanUp() {
-		jdbcTemplate.update("delete from fee_requests");
-		jdbcTemplate.update("delete from account_attributes");
-		jdbcTemplate.update("delete from accounts");
-		jdbcTemplate.update("delete from batch_outbox");
+		initialization.update("delete from fee_requests");
+		initialization.update("delete from account_attributes");
+		initialization.update("delete from accounts");
+		initialization.update("delete from batch_outbox");
 	}
 
 	@ParameterizedTest
@@ -127,7 +137,7 @@ class BatchPostgresApiTests {
 		String request = submission(batchId);
 		mockMvc.perform(post("/api/v1/mock/acc/batch").contentType(MediaType.APPLICATION_JSON)
 				.content(request)).andExpect(status().isAccepted());
-		jdbcTemplate.update("update batch_outbox set processed = true where batch_id = ?", batchId);
+		initialization.update("update batch_outbox set processed = true where batch_id = ?", batchId);
 		List<List<Map<String, Object>>> accepted = storedWork();
 
 		String repeated = changePayload ? request.replace("ACC001", "ACC002")
@@ -260,18 +270,18 @@ class BatchPostgresApiTests {
 	}
 
 	@Test
-	void initializesAndUsesTheSchemaWithOneOrdinaryApplicationRole() {
+	void usesTheEngineManagedSchemaWithARestrictedApplicationRole() throws SQLException {
 		assertEquals("account_app", jdbcTemplate.queryForObject("select current_user", String.class));
 		assertFalse(jdbcTemplate.queryForObject(
 				"select rolsuper from pg_roles where rolname = current_user", Boolean.class));
-		assertEquals("account_app", jdbcTemplate.queryForObject("""
+		assertEquals(POSTGRES.getUsername(), jdbcTemplate.queryForObject("""
 				select tableowner from pg_tables where tablename = 'flyway_schema_history'
 				""", String.class));
-		assertEquals(4, jdbcTemplate.queryForObject("""
+		assertEquals(0, jdbcTemplate.queryForObject("""
 				select count(*) from pg_tables where tableowner = current_user
 				and tablename in ('batch_outbox', 'accounts', 'account_attributes', 'fee_requests')
 				""", Integer.class));
-		assertEquals(2, jdbcTemplate.queryForObject("""
+		assertEquals(3, jdbcTemplate.queryForObject("""
 				select count(*) from information_schema.columns where table_name = 'batch_outbox'
 				""", Integer.class));
 		assertEquals(3, jdbcTemplate.queryForObject("""
@@ -286,11 +296,21 @@ class BatchPostgresApiTests {
 				where constraint_row.conrelid = 'fee_requests'::regclass
 				and constraint_row.contype = 'p'
 				""", String.class));
+		for (String sql : List.of("create table forbidden (id integer)",
+				"create schema forbidden", "create temporary table forbidden (id integer)",
+				"select * from flyway_schema_history", "update batch_outbox set processed = true",
+				"delete from accounts", "truncate accounts cascade")) {
+			try (var connection = jdbcTemplate.getDataSource().getConnection();
+					var statement = connection.createStatement()) {
+				SQLException failure = assertThrows(SQLException.class, () -> statement.execute(sql));
+				assertEquals("42501", failure.getSQLState(), sql);
+			}
+		}
 	}
 
 	@Test
 	void describesLateFeeIdentityViolationsAndRollsBackTheBatch() throws Exception {
-		jdbcTemplate.execute("""
+		initialization.execute("""
 				create function repeat_fee_identity() returns trigger language plpgsql as $$
 				begin
 				    new.fee_request_id := 7;
@@ -298,7 +318,7 @@ class BatchPostgresApiTests {
 				end;
 				$$
 				""");
-		jdbcTemplate.execute("""
+		initialization.execute("""
 				create trigger repeat_fee_identity before insert on fee_requests
 				for each row execute function repeat_fee_identity()
 				""");
@@ -314,14 +334,14 @@ class BatchPostgresApiTests {
 							"Key (account_id, fee_request_id)")));
 			assertRowCounts(0, 0, 0, 0);
 		} finally {
-			jdbcTemplate.execute("drop trigger repeat_fee_identity on fee_requests");
-			jdbcTemplate.execute("drop function repeat_fee_identity()");
+			initialization.execute("drop trigger repeat_fee_identity on fee_requests");
+			initialization.execute("drop function repeat_fee_identity()");
 		}
 	}
 
 	@Test
 	void identifiesTheFailedStoredRecordForMonetaryConstraints() throws Exception {
-		jdbcTemplate.execute("""
+		initialization.execute("""
 				create function invalidate_amount() returns trigger language plpgsql as $$
 				begin
 				    new.transaction_amount := 12.341;
@@ -329,7 +349,7 @@ class BatchPostgresApiTests {
 				end;
 				$$
 				""");
-		jdbcTemplate.execute("""
+		initialization.execute("""
 				create trigger invalidate_amount before insert on fee_requests
 				for each row execute function invalidate_amount()
 				""");
@@ -343,8 +363,8 @@ class BatchPostgresApiTests {
 					.andExpect(jsonPath("$.message", containsString("12.341")));
 			assertRowCounts(0, 0, 0, 0);
 		} finally {
-			jdbcTemplate.execute("drop trigger invalidate_amount on fee_requests");
-			jdbcTemplate.execute("drop function invalidate_amount()");
+			initialization.execute("drop trigger invalidate_amount on fee_requests");
+			initialization.execute("drop function invalidate_amount()");
 		}
 	}
 
