@@ -138,6 +138,7 @@
 				<directory>../pricing-engine/src/main/resources</directory>
 				<includes>
 					<include>db/account/V*__*.sql</include>
+					<include>db/account-postgresql/V*__*.sql</include>
 					<include>db/account-postgresql/R__*.sql</include>
 				</includes>
 			</testResource>

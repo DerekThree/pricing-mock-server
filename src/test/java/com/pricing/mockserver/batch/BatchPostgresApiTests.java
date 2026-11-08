@@ -83,12 +83,7 @@ class BatchPostgresApiTests {
 
 	@DynamicPropertySource
 	static void configureProperties(DynamicPropertyRegistry registry) {
-		Flyway.configure().dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(),
-				POSTGRES.getPassword())
-				.locations("classpath:db/account", "classpath:db/account-postgresql")
-				.placeholders(Map.of("mockServerLogin", "account_app",
-						"engineLogin", "accountdb_engine", "accountDatabase", POSTGRES.getDatabaseName()))
-				.load().migrate();
+		migrateAccountStore();
 		initialization = new JdbcTemplate(new DriverManagerDataSource(POSTGRES.getJdbcUrl(),
 				POSTGRES.getUsername(), POSTGRES.getPassword()));
 		registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
@@ -100,6 +95,15 @@ class BatchPostgresApiTests {
 		registry.add("spring.datasource.hikari.maximum-pool-size", () -> "2");
 		registry.add("pricing-engine.wake-up-url", () ->
 				"http://localhost:" + PRICING_ENGINE.getAddress().getPort() + "/work-available");
+	}
+
+	private static void migrateAccountStore() {
+		Flyway.configure().dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(),
+				POSTGRES.getPassword())
+				.locations("classpath:db/account", "classpath:db/account-postgresql")
+				.placeholders(Map.of("mockServerLogin", "account_app",
+						"engineLogin", "accountdb_engine", "accountDatabase", POSTGRES.getDatabaseName()))
+				.load().migrate();
 	}
 
 	@AfterAll
@@ -124,10 +128,9 @@ class BatchPostgresApiTests {
 
 	@AfterEach
 	void cleanUp() {
-		initialization.update("delete from fee_requests");
-		initialization.update("delete from account_attributes");
-		initialization.update("delete from accounts");
-		initialization.update("delete from batch_outbox");
+		initialization.execute("drop schema public cascade");
+		initialization.execute("create schema public");
+		migrateAccountStore();
 	}
 
 	@ParameterizedTest
