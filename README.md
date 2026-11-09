@@ -80,7 +80,7 @@ include the HTTP status or exception reason; retry warnings include the delay.
 
 ## Local database
 
-Use a PostgreSQL database separate from the Pricing Backend's Pricing Configuration database.
+Use a PostgreSQL database separate from the Pricing Store.
 The main repository's `deploy/local/compose.yaml` hosts both databases in one PostgreSQL container
 and starts all four application containers. Run `deploy/setup.ps1` from that repository for local
 or AWS startup. Local passwords are stored in `deploy/local/.env`; `ACCOUNT_PASSWORD` is used by
