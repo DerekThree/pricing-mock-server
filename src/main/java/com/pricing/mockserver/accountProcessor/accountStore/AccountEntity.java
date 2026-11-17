@@ -1,12 +1,9 @@
-package com.pricing.mockserver.account;
+package com.pricing.mockServer.accountProcessor.accountStore;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 
-import com.pricing.mockserver.accountattribute.AccountAttributeEntity;
-import com.pricing.mockserver.batch.BatchOutboxEntity;
-import com.pricing.mockserver.feerequest.FeeRequestEntity;
 import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -40,7 +37,7 @@ public class AccountEntity {
 
 	@ManyToOne(fetch = FetchType.LAZY, optional = false)
 	@JoinColumn(name = "batch_id", nullable = false)
-	private BatchOutboxEntity batch;
+	private AccountOutboxEntity batch;
 
 	@Column(name = "account_number", nullable = false, length = 25)
 	private String accountNumber;

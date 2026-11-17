@@ -1,8 +1,9 @@
-package com.pricing.mockserver.config;
+package com.pricing.mockServer.config;
 
 import java.math.BigDecimal;
 
-import com.pricing.mockserver.accountattribute.AccountAttributeScalarValue;
+import com.pricing.mockServer.accountProcessor.accountStore.AccountAttributeScalarValue;
+
 import tools.jackson.core.JsonGenerator;
 import tools.jackson.databind.SerializationContext;
 import tools.jackson.databind.ValueSerializer;

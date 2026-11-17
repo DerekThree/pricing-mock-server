@@ -1,4 +1,4 @@
-package com.pricing.mockserver.batch;
+package com.pricing.mockServer.accountProcessor;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -256,7 +256,7 @@ class BatchApiTests {
 		mockMvc.perform(get("/openapi.yaml"))
 				.andExpect(status().isOk())
 				.andExpect(content().string(org.hamcrest.Matchers.containsString(
-						"title: Mock Account Processor API")))
+						"title: Mock Server API")))
 				.andExpect(content().string(containsString("/api/v1/mock/acc/batch:")))
 				.andExpect(content().string(containsString("'409':")))
 				.andExpect(content().string(containsString("BATCH_MAX_ACCOUNTS")))

@@ -1,4 +1,4 @@
-package com.pricing.mockserver.batch;
+package com.pricing.mockServer.accountProcessor;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -21,7 +21,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import com.pricing.mockserver.MockServerApplication;
+import com.pricing.mockServer.MockServerApplication;
 import com.sun.net.httpserver.HttpServer;
 import com.zaxxer.hikari.HikariDataSource;
 import org.junit.jupiter.api.AfterAll;

@@ -1,0 +1,71 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:mock-transaction-processor:transaction-batch:v1",
+  "title": "TransactionBatch",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["batchId", "accounts"],
+  "properties": {
+    "batchId": { "type": "string", "format": "uuid" },
+    "accounts": { "type": "array", "items": { "$ref": "#/definitions/AccountResult" } }
+  },
+  "definitions": {
+    "AccountResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["accountNumber", "status", "pricingPlanCode", "fees"],
+      "properties": {
+        "accountNumber": { "type": "string" },
+        "status": {
+          "type": "string",
+          "enum": [
+            "OK", "BRANCH_NOT_FOUND", "REGION_NOT_FOUND", "PLAN_NOT_FOUND",
+            "DUPLICATE_ATTRIBUTE", "INVALID_ATTRIBUTE_TYPE", "MISSING_ATTRIBUTE", "ERROR"
+          ]
+        },
+        "pricingPlanCode": { "type": ["string", "null"] },
+        "fees": {
+          "type": ["array", "null"],
+          "items": { "$ref": "#/definitions/FeeResult" }
+        }
+      },
+      "if": { "properties": { "status": { "const": "OK" } } },
+      "then": {
+        "properties": { "pricingPlanCode": { "type": "string" }, "fees": { "type": "array" } }
+      },
+      "else": {
+        "properties": { "pricingPlanCode": { "type": "null" }, "fees": { "type": "null" } }
+      }
+    },
+    "FeeResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["feeRequestId", "status", "amount", "reasons"],
+      "properties": {
+        "feeRequestId": { "type": "integer" },
+        "status": {
+          "type": "string",
+          "enum": [
+            "CHARGED", "WAIVED", "FEE_NOT_FOUND", "MISSING_TRANSACTION",
+            "INVALID_TRANSACTION_AMOUNT", "INVALID_ELIGIBILITY_CONDITION", "ERROR"
+          ]
+        },
+        "amount": { "type": ["number", "null"] },
+        "reasons": { "type": ["array", "null"], "items": { "type": "string" } }
+      },
+      "if": { "properties": { "status": { "const": "CHARGED" } } },
+      "then": {
+        "properties": { "amount": { "type": "number" }, "reasons": { "type": "null" } }
+      },
+      "else": {
+        "if": { "properties": { "status": { "const": "WAIVED" } } },
+        "then": {
+          "properties": { "amount": { "type": "null" }, "reasons": { "type": "array" } }
+        },
+        "else": {
+          "properties": { "amount": { "type": "null" }, "reasons": { "type": "null" } }
+        }
+      }
+    }
+  }
+}

@@ -1,9 +1,9 @@
-package com.pricing.mockserver.accountattribute;
+package com.pricing.mockServer.accountProcessor.accountStore;
 
 import java.math.BigDecimal;
 import java.util.Objects;
 
-import com.pricing.mockserver.generated.model.AccountAttributeValue;
+import com.pricing.mockServer.generated.model.AccountAttributeValue;
 
 public final class AccountAttributeScalarValue implements AccountAttributeValue {
 

@@ -1,0 +1,28 @@
+asyncapi: 3.0.0
+info:
+  title: Mock Transaction Processor Transaction Batches
+  version: 1.0.0
+  description: Complete stored Transaction Batches delivered live to the single Dashboard.
+servers:
+  local:
+    host: localhost:8081
+    protocol: ws
+channels:
+  transactionBatches:
+    address: /api/v1/mock/txn/batches
+    messages:
+      transactionBatch:
+        $ref: '#/components/messages/TransactionBatch'
+operations:
+  sendTransactionBatch:
+    action: send
+    channel:
+      $ref: '#/channels/transactionBatches'
+components:
+  messages:
+    TransactionBatch:
+      contentType: application/json
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema:
+          $ref: './schemas/transaction-batch-v1.json'

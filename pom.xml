@@ -30,8 +30,15 @@
 		<java.version>21</java.version>
 		<openapi-generator.version>7.17.0</openapi-generator.version>
 		<springdoc.version>3.0.2</springdoc.version>
+		<json-schema-validator.version>3.0.9</json-schema-validator.version>
 	</properties>
 	<dependencies>
+		<dependency>
+			<groupId>com.networknt</groupId>
+			<artifactId>json-schema-validator</artifactId>
+			<version>${json-schema-validator.version}</version>
+			<scope>test</scope>
+		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-actuator</artifactId>
@@ -127,6 +134,8 @@
 				<targetPath>static</targetPath>
 				<includes>
 					<include>openapi.yaml</include>
+					<include>asyncapi.yaml</include>
+					<include>schemas/*.json</include>
 				</includes>
 			</resource>
 		</resources>
@@ -140,6 +149,7 @@
 					<include>db/account/V*__*.sql</include>
 					<include>db/account-postgresql/V*__*.sql</include>
 					<include>db/account-postgresql/R__*.sql</include>
+					<include>db/recommendation/V*__*.sql</include>
 				</includes>
 			</testResource>
 		</testResources>
@@ -157,8 +167,8 @@
 						<configuration>
 							<inputSpec>${project.basedir}/openapi.yaml</inputSpec>
 							<generatorName>spring</generatorName>
-							<apiPackage>com.pricing.mockserver.generated.api</apiPackage>
-							<modelPackage>com.pricing.mockserver.generated.model</modelPackage>
+							<apiPackage>com.pricing.mockServer.generated.api</apiPackage>
+							<modelPackage>com.pricing.mockServer.generated.model</modelPackage>
 							<generateApiTests>false</generateApiTests>
 							<generateModelTests>false</generateModelTests>
 							<generateApiDocumentation>false</generateApiDocumentation>

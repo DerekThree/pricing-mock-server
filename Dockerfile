@@ -5,6 +5,8 @@ COPY pricing-engine/src/main/resources/db/account/ \
     /app/pricing-engine/src/main/resources/db/account/
 COPY pricing-engine/src/main/resources/db/account-postgresql/ \
     /app/pricing-engine/src/main/resources/db/account-postgresql/
+COPY pricing-engine/src/main/resources/db/recommendation/ \
+    /app/pricing-engine/src/main/resources/db/recommendation/
 RUN ./mvnw clean package
 
 FROM eclipse-temurin:21-jre-jammy

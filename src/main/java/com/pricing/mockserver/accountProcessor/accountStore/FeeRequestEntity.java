@@ -1,8 +1,8 @@
-package com.pricing.mockserver.accountattribute;
+package com.pricing.mockServer.accountProcessor.accountStore;
 
-import com.pricing.mockserver.account.AccountEntity;
+import java.math.BigDecimal;
+
 import jakarta.persistence.Column;
-import jakarta.persistence.Convert;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
@@ -16,7 +16,6 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
-import org.hibernate.annotations.ColumnTransformer;
 
 @Entity
 @AllArgsConstructor
@@ -24,8 +23,8 @@ import org.hibernate.annotations.ColumnTransformer;
 @Getter
 @Setter
 @NoArgsConstructor
-@Table(name = "account_attributes")
-public class AccountAttributeEntity {
+@Table(name = "fee_requests")
+public class FeeRequestEntity {
 
 	@Id
 	@GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -35,11 +34,12 @@ public class AccountAttributeEntity {
 	@JoinColumn(name = "account_id", nullable = false)
 	private AccountEntity account;
 
+	@Column(name = "fee_request_id", nullable = false)
+	private Long feeRequestId;
+
 	@Column(nullable = false, length = 25)
 	private String code;
 
-	@Convert(converter = AccountAttributeValueConverter.class)
-	@ColumnTransformer(write = "?::jsonb")
-	@Column(nullable = false, columnDefinition = "jsonb")
-	private AccountAttributeScalarValue value;
+	@Column(name = "transaction_amount", columnDefinition = "numeric")
+	private BigDecimal transactionAmount;
 }

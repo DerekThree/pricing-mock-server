@@ -1,10 +1,9 @@
-package com.pricing.mockserver.batch;
+package com.pricing.mockServer.accountProcessor.accountStore;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
-import com.pricing.mockserver.account.AccountEntity;
 import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -25,7 +24,7 @@ import lombok.Setter;
 @Setter
 @NoArgsConstructor
 @Table(name = "batch_outbox")
-public class BatchOutboxEntity {
+public class AccountOutboxEntity {
 
 	@Id
 	@Column(name = "batch_id", nullable = false)

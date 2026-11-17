@@ -1,4 +1,4 @@
-package com.pricing.mockserver.accountattribute;
+package com.pricing.mockServer.accountProcessor.accountStore;
 
 import java.math.BigDecimal;
 

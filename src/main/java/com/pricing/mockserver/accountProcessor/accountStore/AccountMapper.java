@@ -1,27 +1,24 @@
-package com.pricing.mockserver.batch;
+package com.pricing.mockServer.accountProcessor.accountStore;
 
-import com.pricing.mockserver.account.AccountEntity;
-import com.pricing.mockserver.accountattribute.AccountAttributeEntity;
-import com.pricing.mockserver.accountattribute.AccountAttributeScalarValue;
-import com.pricing.mockserver.feerequest.FeeRequestEntity;
-import com.pricing.mockserver.generated.model.AccountAttribute;
-import com.pricing.mockserver.generated.model.BatchAccount;
-import com.pricing.mockserver.generated.model.BatchFeeRequest;
-import com.pricing.mockserver.generated.model.BatchRequest;
+import com.pricing.mockServer.generated.model.AccountAttribute;
+import com.pricing.mockServer.generated.model.BatchAccount;
+import com.pricing.mockServer.generated.model.BatchFeeRequest;
+import com.pricing.mockServer.generated.model.BatchRequest;
 import org.springframework.stereotype.Component;
 
 @Component
-class BatchMapper {
+public
+class AccountMapper {
 
-	BatchOutboxEntity toBatchOutboxEntity(BatchRequest request) {
-		BatchOutboxEntity batch = BatchOutboxEntity.builder()
+	public AccountOutboxEntity toAccountOutboxEntity(BatchRequest request) {
+		AccountOutboxEntity batch = AccountOutboxEntity.builder()
 				.batchId(request.getBatchId()).processed(false).build();
 		batch.setAccounts(request.getAccounts().stream()
 				.map(account -> toAccountEntity(account, batch)).toList());
 		return batch;
 	}
 
-	private AccountEntity toAccountEntity(BatchAccount submitted, BatchOutboxEntity batch) {
+	private AccountEntity toAccountEntity(BatchAccount submitted, AccountOutboxEntity batch) {
 		AccountEntity account = AccountEntity.builder()
 				.batch(batch)
 				.accountNumber(submitted.getAccountNumber())

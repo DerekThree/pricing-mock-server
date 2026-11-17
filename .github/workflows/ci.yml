@@ -30,6 +30,7 @@ jobs:
           sparse-checkout: |
             src/main/resources/db/account
             src/main/resources/db/account-postgresql
+            src/main/resources/db/recommendation
 
       - name: Install Java 21
         uses: actions/setup-java@v5

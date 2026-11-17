@@ -1,4 +1,4 @@
-package com.pricing.mockserver.batch;
+package com.pricing.mockServer.accountProcessor;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -20,7 +20,7 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
-import com.pricing.mockserver.accountattribute.AccountAttributeEntity;
+import com.pricing.mockServer.accountProcessor.accountStore.AccountAttributeEntity;
 import com.sun.net.httpserver.HttpServer;
 import jakarta.persistence.EntityManager;
 import org.flywaydb.core.Flyway;

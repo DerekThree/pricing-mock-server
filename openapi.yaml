@@ -1,14 +1,24 @@
 openapi: 3.0.3
 info:
-  title: Mock Account Processor API
-  description: Accept and durably store complete Pricing Batches in the Account Store.
+  title: Mock Server API
+  description: Accept Pricing Batches and acknowledge Transaction Processor wake-ups.
   version: 1.0.0
 servers:
   - url: http://localhost:8081
     description: Local development server
 tags:
   - name: Batch
+  - name: Transaction
 paths:
+  /api/v1/mock/txn/wake:
+    post:
+      tags: [Transaction]
+      operationId: wakeUp
+      summary: Signal that recommendations may be available
+      description: Bodyless wake-up; pending batches are discovered from the Recommendation Store.
+      responses:
+        '202':
+          description: Wake-up acknowledged; processing proceeds asynchronously.
   /api/v1/mock/acc/batch:
     post:
       tags: [Batch]

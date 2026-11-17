@@ -1,4 +1,4 @@
-package com.pricing.mockserver.config;
+package com.pricing.mockServer.config;
 
 import com.zaxxer.hikari.HikariDataSource;
 import org.springframework.boot.context.properties.ConfigurationProperties;

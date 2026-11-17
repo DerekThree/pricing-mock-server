@@ -4,11 +4,15 @@ Spring Boot Mock Server. The Mock Account Processor accepts Pricing Batches at
 `POST /api/v1/mock/acc/batch`, storing the complete submission and pending Batch Outbox row in one
 transaction before returning `202` with `batchId` and an acceptance message.
 
-The planned Transaction Processor wake-up endpoint is `POST /api/v1/mock/txn/wake`.
-Both paths share the `/api/v1/mock/*` routing prefix. The wake-up endpoint is not implemented yet.
+The Transaction Processor wake-up endpoint is `POST /api/v1/mock/txn/wake`.
+Both processors share the `/api/v1/mock/*` routing prefix.
 
-The controller delegates to `BatchService`, which validates submissions and owns the transaction.
-`BatchRepository` persists the batch with its owned accounts, attributes, and Fee Requests through
+The controller delegates to `AccountService`, which validates submissions and owns the transaction.
+Existing Account Store entities and value conversion classes are grouped in `accountStore`,
+matching the Engine's package convention. Recommendation mappings live in `recommendationStore`.
+The base package is `com.pricing.mockServer`; Account Processor handling classes live in
+`accountProcessor`, and Transaction Processor handling classes live in `transactionProcessor`.
+`AccountRepository` persists the batch with its owned accounts, attributes, and Fee Requests through
 JPA cascades, following the backend's owned-child mappings.
 Batch identity uses insert-only persistence and the PostgreSQL outbox primary key. A repeated
 `batchId` returns `409` with code `BATCH_ALREADY_ACCEPTED` and a message identifying the batch,
@@ -22,7 +26,7 @@ submitted count in the message, before any rows are stored.
 
 ## API contract ownership and compatibility
 
-The Mock Account Processor owns `openapi.yaml` (currently API version `1.0.0`) and
+The Mock Server owns `openapi.yaml` (currently API version `1.0.0`) and
 publishes it at `/openapi.yaml`. The Dashboard is a consumer: it generates its API client
 from this provider-owned contract rather than independently defining request or response
 models. The path `POST /api/v1/mock/acc/batch` is the supported v1 submission contract.
@@ -49,10 +53,36 @@ models. The path `POST /api/v1/mock/acc/batch` is the supported v1 submission co
   against the targeted API version. Include the `202` acceptance and `409` duplicate-batch
   behavior. During a v2 migration, keep regression tests for v1 until v1 is retired.
 
+## Transaction Processor Transaction Batches
+
+The Transaction Processor runs in this Mock Server alongside the Account Processor.
+`POST /api/v1/mock/txn/wake` is bodyless and returns an empty `202` before processing completes.
+It discovers a pending Recommendation Outbox batch, maps its stored recommendations into one
+complete `TransactionBatch`, attempts live delivery to the connected Dashboard at
+`/api/v1/mock/txn/batches`, then sets `processed` true. It does not recalculate pricing or
+execute financial transactions. Recommendation rows are retained unchanged.
+
+`asyncapi.yaml` owns the WebSocket contract and references `schemas/transaction-batch-v1.json`.
+Both are published as static resources. The Dashboard generates its message models from this
+schema; persistence entities and Engine executable classes are not the wire contract.
+
+Configure `RECOMMENDATION_STORE_URL`, `RECOMMENDATION_STORE_USERNAME`, and
+`RECOMMENDATION_STORE_PASSWORD`, following the Engine's environment naming. Defaults target
+`jdbc:postgresql://localhost:5432/recommendationdb` with the existing
+`recommendationdb_txn_processor` login and local password `recommendationpass`.
+The Engine owns migrations and grants; this consumer validates the schema without migrating it.
+Its role reads recommendations and updates only the Recommendation Outbox.
+
+Ticket 01 implements one pending batch per wake-up. Startup discovery, serial draining and
+duplicate wake-up handling, reconnection, and database recovery remain in tickets 03–05.
+A socket send and the completion update are not atomic: a crash between them leaves the batch
+pending and can cause delivery again when processing is resumed. Delivery is not exactly-once.
+Production uses the existing ECS/ALB deployment; deployed verification remains in ticket 06.
+
 ## Pricing Engine wake-ups
 
-After transactional `BatchRepository.save` returns with the transaction committed,
-`BatchService.accept` starts `notifyPricingEngine` on a Java virtual thread. The method sends
+After transactional `AccountRepository.save` returns with the transaction committed,
+`AccountService.accept` starts `notifyPricingEngine` on a Java virtual thread. The method sends
 an empty HTTP `POST` to the configured Pricing Engine URL, with no Batch ID or business payload.
 The submission returns `202` without waiting for the consumer or delivery retries.
 
@@ -68,7 +98,7 @@ an attempt. Retries remain in memory and stop after the configured total attempt
 Delivery failure does not become `ACCOUNT_STORE_UNAVAILABLE` or change accepted rows or
 `processed`. No notification-delivery state is persisted.
 
-On startup or restart, `BatchService` checks through `BatchRepository` for unprocessed Batch
+On startup or restart, `AccountService` checks through `AccountRepository` for unprocessed Batch
 Outbox rows once the application is ready. If any exist, it starts the same bounded HTTP delivery
 on a virtual thread, using the configured endpoint, timeouts, retry delay, and attempt limit.
 An empty store or only processed rows produces no recovery wake-up. Recovery leaves all stored
@@ -111,7 +141,7 @@ From this directory:
 
 The default port is `8081` (`SERVER_PORT` overrides it). The provider-owned contract is
 `openapi.yaml`, served at `/openapi.yaml`, with Swagger UI at `/docs`. Maven generates API
-interfaces and models in `com.pricing.mockserver.generated`, independently of the backend.
+interfaces and models in `com.pricing.mockServer.generated`, independently of the backend.
 
 The Dockerfile follows the Backend's Java 21 multistage Maven build. `GET /actuator/health`
 reports application/database health without exposing internal details. Compose and AWS use

@@ -1,7 +1,7 @@
-package com.pricing.mockserver.config;
+package com.pricing.mockServer.config;
 
-import com.pricing.mockserver.accountattribute.AccountAttributeScalarValue;
-import com.pricing.mockserver.generated.model.AccountAttributeValue;
+import com.pricing.mockServer.accountProcessor.accountStore.AccountAttributeScalarValue;
+import com.pricing.mockServer.generated.model.AccountAttributeValue;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import tools.jackson.databind.module.SimpleModule;

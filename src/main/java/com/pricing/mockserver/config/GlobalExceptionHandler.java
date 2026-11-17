@@ -1,10 +1,10 @@
-package com.pricing.mockserver.config;
+package com.pricing.mockServer.config;
 
 import java.sql.SQLException;
 import java.util.Locale;
 import java.util.stream.Collectors;
 
-import com.pricing.mockserver.generated.model.ErrorResponse;
+import com.pricing.mockServer.generated.model.ErrorResponse;
 import jakarta.persistence.PersistenceException;
 import jakarta.validation.ConstraintViolationException;
 import org.postgresql.util.PSQLException;
