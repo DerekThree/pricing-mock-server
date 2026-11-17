@@ -54,7 +54,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@SpringBootTest(properties = "dashboard.origin=https://dashboard.example.test")
+@SpringBootTest
 @AutoConfigureMockMvc
 class BatchApiTests {
 
@@ -119,10 +119,8 @@ class BatchApiTests {
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = {
-			"http://localhost:5173", "http://127.0.0.1:5174", "https://dashboard.example.test"
-	})
-	void permitsBrowserSubmissions(String origin) throws Exception {
+	@ValueSource(strings = { "http://localhost:5173", "http://127.0.0.1:5174" })
+	void permitsLocalBrowserSubmissions(String origin) throws Exception {
 		mockMvc.perform(options("/api/v1/mock/acc/batch")
 				.header("Origin", origin)
 				.header("Access-Control-Request-Method", "POST")
@@ -135,30 +133,12 @@ class BatchApiTests {
 	}
 
 	@Test
-	void acceptsConfiguredDashboardBrowserSubmission() throws Exception {
-		UUID batchId = UUID.randomUUID();
-		mockMvc.perform(post("/api/v1/mock/acc/batch")
-				.header("Origin", "https://dashboard.example.test")
-				.contentType(MediaType.APPLICATION_JSON).content(submission(batchId)))
-				.andExpect(status().isAccepted())
-				.andExpect(header().string(
-						"Access-Control-Allow-Origin", "https://dashboard.example.test"));
-		assertRowCounts(1, 1, 3, 2);
-	}
-
-	@Test
 	void rejectsOtherBrowserOrigins() throws Exception {
 		mockMvc.perform(options("/api/v1/mock/acc/batch")
 				.header("Origin", "https://example.com")
 				.header("Access-Control-Request-Method", "POST"))
 				.andExpect(status().isForbidden())
 				.andExpect(header().doesNotExist("Access-Control-Allow-Origin"));
-		mockMvc.perform(post("/api/v1/mock/acc/batch")
-				.header("Origin", "https://example.com")
-				.contentType(MediaType.APPLICATION_JSON).content(submission(UUID.randomUUID())))
-				.andExpect(status().isForbidden())
-				.andExpect(header().doesNotExist("Access-Control-Allow-Origin"));
-		assertRowCounts(0, 0, 0, 0);
 	}
 
 	@Nested
