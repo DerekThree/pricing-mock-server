@@ -3,6 +3,7 @@ package com.pricing.mockServer.accountProcessor;
 import java.time.Duration;
 
 import com.pricing.mockServer.accountProcessor.accountStore.AccountMapper;
+import com.pricing.mockServer.accountProcessor.accountStore.AccountOutboxEntity;
 import com.pricing.mockServer.accountProcessor.accountStore.AccountRepository;
 import com.pricing.mockServer.generated.model.BatchAcceptance;
 import com.pricing.mockServer.generated.model.BatchRequest;
@@ -47,8 +48,9 @@ public class AccountService {
 	public BatchAcceptance accept(BatchRequest request) {
 		log.info("Pricing Batch received: {}", request.getBatchId());
 		validator.validate(request);
-		accountRepository.save(mapper.toAccountOutboxEntity(request));
-		log.info("Pricing Batch stored: {}", request.getBatchId());
+		AccountOutboxEntity outboxEntity = mapper.toAccountOutboxEntity(request);
+		accountRepository.save(outboxEntity);
+		log.info("Pricing Batch stored: {}", outboxEntity.getBatchId());
 		Thread.startVirtualThread(this::notifyPricingEngine);
 		return new BatchAcceptance(request.getBatchId(), "Pricing Batch accepted");
 	}

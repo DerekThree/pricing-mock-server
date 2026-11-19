@@ -29,11 +29,13 @@ public class TransactionWebSocketHandler extends TextWebSocketHandler {
 	public void send(TransactionBatch result) {
 		WebSocketSession session = dashboard;
 		if (session != null && session.isOpen()) {
+			TextMessage message = new TextMessage(json.writeValueAsString(result));
 			try {
 				synchronized (session) {
-					session.sendMessage(new TextMessage(json.writeValueAsString(result)));
+					session.sendMessage(message);
 				}
-			} catch (IOException ex) {
+				log.info("Pricing Batch sent: {}", result.batchId());
+			} catch (IOException | IllegalStateException ex) {
 				log.warn("Failed to deliver Transaction Batch {}", result.batchId(), ex);
 			}
 		}

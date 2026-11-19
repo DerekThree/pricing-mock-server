@@ -2,7 +2,10 @@ asyncapi: 3.0.0
 info:
   title: Mock Transaction Processor Transaction Batches
   version: 1.0.0
-  description: Complete stored Transaction Batches delivered live to the single Dashboard.
+  description: >-
+    Complete stored Transaction Batches delivered live to the single Dashboard. The processor
+    attempts one send when connected and completes the outbox after the attempt or a disconnected
+    skip. A reconnect restores future delivery only.
 servers:
   local:
     host: localhost:8081

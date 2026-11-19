@@ -57,10 +57,12 @@ models. The path `POST /api/v1/mock/acc/batch` is the supported v1 submission co
 
 The Transaction Processor runs in this Mock Server alongside the Account Processor.
 `POST /api/v1/mock/txn/wake` is bodyless and returns an empty `202` before processing completes.
-It discovers a pending Recommendation Outbox batch, maps its stored recommendations into one
-complete `TransactionBatch`, attempts live delivery to the connected Dashboard at
-`/api/v1/mock/txn/batches`, then sets `processed` true. It does not recalculate pricing or
-execute financial transactions. Recommendation rows are retained unchanged.
+On startup or restart and each wake-up, it drains pending Recommendation Outbox batches serially.
+For each batch, it maps stored recommendations into one complete `TransactionBatch`. It attempts
+live delivery once to the connected Dashboard at `/api/v1/mock/txn/batches`, or skips delivery
+if the Dashboard is disconnected. It sets `processed` true after the attempt or skip, including
+when the socket write fails. It does not recalculate pricing or execute financial transactions.
+Recommendation rows are retained unchanged.
 
 `asyncapi.yaml` owns the WebSocket contract and references `schemas/transaction-batch-v1.json`.
 Both are published as static resources. The Dashboard generates its message models from this
@@ -73,8 +75,10 @@ Configure `RECOMMENDATION_STORE_URL`, `RECOMMENDATION_STORE_USERNAME`, and
 The Engine owns migrations and grants; this consumer validates the schema without migrating it.
 Its role reads recommendations and updates only the Recommendation Outbox.
 
-Ticket 01 implements one pending batch per wake-up. Startup discovery, serial draining and
-duplicate wake-up handling, reconnection, and database recovery remain in tickets 03–05.
+Startup and HTTP wake-ups share the existing synchronized drain. Overlapping or duplicate
+wake-ups cannot advance to another batch before the current batch's completion update commits
+or resend already-processed rows. Reconnecting only restores delivery of future results. Database
+recovery remains in ticket 05.
 A socket send and the completion update are not atomic: a crash between them leaves the batch
 pending and can cause delivery again when processing is resumed. Delivery is not exactly-once.
 Production uses the existing ECS/ALB deployment; deployed verification remains in ticket 06.

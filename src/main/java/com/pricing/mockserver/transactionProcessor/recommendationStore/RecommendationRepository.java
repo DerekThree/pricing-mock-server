@@ -15,6 +15,11 @@ public class RecommendationRepository {
 	private EntityManager entityManager;
 
 	@Transactional(transactionManager = "recommendationTransactionManager", readOnly = true)
+	public void checkConnection() {
+		entityManager.createNativeQuery("select 1", Integer.class).getSingleResult();
+	}
+
+	@Transactional(transactionManager = "recommendationTransactionManager", readOnly = true)
 	public Optional<RecommendationOutboxEntity> findPending() {
 		return entityManager.createQuery("""
 				select batch from RecommendationOutboxEntity batch where batch.processed = false
