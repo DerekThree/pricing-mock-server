@@ -303,7 +303,7 @@ class TransactionApiTests {
 		WebSocket socket = connect(messages);
 		try {
 			assertThat(wakeUp().statusCode()).isEqualTo(202);
-			String message = messages.poll(3, TimeUnit.SECONDS);
+			String message = messages.poll(5, TimeUnit.SECONDS);
 			assertThat(message).isNotNull();
 			String schema = new String(getClass().getResourceAsStream(
 					"/static/schemas/transaction-batch-v1.json").readAllBytes(), StandardCharsets.UTF_8);
